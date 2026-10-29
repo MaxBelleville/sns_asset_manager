@@ -1,0 +1,48 @@
+[package]
+name = "sns_asset_manager"
+description =""
+version = "0.1.0"
+edition = "2024"
+
+[features]
+bevy_math=["dep:bevy_math"]
+glam=["dep:glam"]
+
+[workspace]
+resolver = "2"
+members = ["macros"]
+
+[workspace.dependencies]
+inventory = "0.3.25"
+ron = "0.12.3"
+rhai = {version = "1.27.0", features = ["serde","compact_str","sync"] }
+serde = {version = "1.0.229", features = ["derive"] }
+heck = "0.5.0"
+
+[dependencies]
+rhai = {workspace=true}
+ron = {workspace=true}
+serde = {workspace=true}
+vfs = {git = "https://github.com/MaxBelleville/rust-vfs", features =["zip"]}
+semver = {version="1.0.28",features=["serde"]}
+macros = { path = "macros" }
+inventory = {workspace = true}
+heck = {workspace = true}
+
+bevy_math = {version = "0.20.0", optional = true}
+glam = {version="0.34.1", optional=true}
+zip = "9.0.5"
+
+
+[[example]]
+name = "basic"
+path = "examples/basic.rs"
+
+
+[[example]]
+name = "basic-all"
+path = "examples/basic-all.rs"
+
+[[example]]
+name = "multidir"
+path = "examples/multidir.rs"

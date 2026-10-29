@@ -1,0 +1,5 @@
+(
+asset_type:Static,
+struct_name:"Basic",
+data: (is_loaded:true)
+)
