@@ -1,5 +1,16 @@
+[(
+asset_type:Static,
+struct_name:"BasicA",
+data: (is_loaded:true)
+),
 (
 asset_type:Static,
-struct_name:"Basic",
-data: (is_loaded:true)
+struct_name:"BasicB",
+data: (parent:["core:asset3"],is_loaded:true)
+),
+(
+asset_type:Static,
+struct_name:"BasicB",
+data: (parent:["core:asset2"],is_loaded:false)
 )
+]

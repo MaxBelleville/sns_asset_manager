@@ -15,12 +15,23 @@ mod registry;
 use assets::*;
 
 pub mod prelude {
+    pub use super::assets::AssetId;
     pub use super::assets::AssetRef;
     pub use super::process_assets;
+    pub use super::registry::AssetGroup;
+    pub use super::registry::AssetRegistration;
+    pub use super::registry::Registry;
+    pub use super::registry::initialize_registry;
     pub use macros::MakeAsset;
 }
 
-pub fn process_assets(root: &Path, use_current_dir: bool) -> Result<(), String> {
+pub type SymbolMap = HashMap<String, u32>;
+
+pub fn process_assets(
+    root: &Path,
+    registry: &mut registry::Registry,
+    use_current_dir: bool,
+) -> Result<(), String> {
     let vfs_path = get_vfs_path(root, use_current_dir)?;
     let mut processed_files = HashSet::new();
     let mut collected_assets = HashMap::new();
@@ -32,7 +43,21 @@ pub fn process_assets(root: &Path, use_current_dir: bool) -> Result<(), String> 
         true,
     )?;
 
-    let processed = split_and_categorize_headers(collected_assets)?;
+    let (processed, symbols) = split_and_categorize_headers(collected_assets)?;
+    for (struct_name, headers) in processed.statics {
+        // 1. Fetch the correct loader for this specific struct type
+        let loader = *registry.get_loader(&struct_name).ok_or_else(|| {
+            format!(
+                "No registered asset loader found for struct type: '{}'",
+                struct_name
+            )
+        })?;
+
+        for header in headers {
+            // 2. Invoke only the correct loader with its pre-calculated ID and data
+            loader(registry, header.asset_ref, &symbols, header.data.unwrap())?;
+        }
+    }
 
     Ok(())
 }
@@ -82,18 +107,17 @@ fn is_zip(root: &Path) -> bool {
 
 fn split_and_categorize_headers(
     collected_assets: HashMap<String, AssetHeader>,
-) -> Result<ProcessedAssets, String> {
-    let mut id_counters = HashMap::<String, u32>::new();
-
+) -> Result<(ProcessedAssets, SymbolMap), String> {
     let mut processed = ProcessedAssets::default();
+    let mut symbol_map = SymbolMap::new();
+    let mut struct_counter = HashMap::<String, u32>::new();
 
-    for (_, mut header) in collected_assets {
+    for (asset_ref, header) in collected_assets {
         if let Some(ref struct_name) = header.struct_name {
-            let count = id_counters.entry(struct_name.clone()).or_insert(0);
+            let count = struct_counter.entry(struct_name.clone()).or_insert(0);
             *count += 1;
-            header.id = *count;
+            symbol_map.insert(asset_ref, (*count).saturating_sub(1));
         }
-
         match header.asset_type {
             AssetType::Declare(_) => {
                 let struct_name = header.struct_name.as_ref().unwrap();
@@ -117,16 +141,10 @@ fn split_and_categorize_headers(
                 // Scripts already had their IDs handled during parsing
                 processed.scripts.push(header);
             }
-            AssetType::Unknown => {
-                eprintln!(
-                    "Warning: Skipping asset with Unknown type: {}",
-                    header.asset_ref
-                );
-            }
         }
     }
 
-    Ok(processed)
+    Ok((processed, symbol_map))
 }
 
 fn recursive_discovery(
@@ -175,8 +193,6 @@ fn recursive_discovery(
     if bundle_paths.is_empty() {
         add_asset_paths = true;
     }
-
-    let mut script_id = 0;
 
     if asset_bundle.includes.is_empty() {
         add_asset_paths = true;
@@ -229,7 +245,6 @@ fn recursive_discovery(
                         &mut *collected_assets,
                         include_path,
                         asset_bundle.full_namespace.clone(),
-                        &mut script_id,
                         is_rhai,
                     )?;
                     asset_headers.extend(headers);
@@ -263,7 +278,6 @@ fn recursive_discovery(
                     &mut *collected_assets,
                     asset_path,
                     asset_bundle.full_namespace.clone(),
-                    &mut script_id,
                     final_path_str.ends_with(".rhai"),
                 )?;
                 processed_files.insert(final_path_str);
@@ -279,13 +293,12 @@ fn gather_headers(
     collected_assets: &mut HashMap<String, AssetHeader>,
     path: VfsPath,
     namespace: String,
-    script_id: &mut u32,
     is_rhai: bool,
 ) -> Result<Vec<AssetHeader>, String> {
     let mut final_headers = Vec::new();
 
     let headers = if is_rhai {
-        create_rhai_header(path, namespace, script_id)
+        create_rhai_header(path, namespace)
     } else {
         create_ron_headers(path, namespace)?
     };
@@ -302,15 +315,9 @@ fn gather_headers(
 }
 
 /// Parses a .rhai file and returns a single script header
-fn create_rhai_header(path: VfsPath, namespace: String, script_id: &mut u32) -> Vec<AssetHeader> {
-    *script_id += 1;
+fn create_rhai_header(path: VfsPath, namespace: String) -> Vec<AssetHeader> {
     let script_name = path.filename().replace(".rhai", "");
-    vec![AssetHeader::new_script(
-        path,
-        namespace,
-        script_name,
-        *script_id,
-    )]
+    vec![AssetHeader::new_script(path, namespace, script_name)]
 }
 
 /// Parses a .ron file (which can be a single asset or a list) and returns headers

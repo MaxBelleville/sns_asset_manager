@@ -7,9 +7,9 @@ edition = "2024"
 proc-macro = true
 
 [dependencies]
-syn = "2.0.112"
-quote = "1.0.42"
-proc-macro2 = "1.0.104"
+syn = "3.0.9"
+quote = "1.0.47"
+proc-macro2 = "1.0.107"
 heck = "0.5.0"
 inventory = {workspace = true}
 ron = {workspace = true}

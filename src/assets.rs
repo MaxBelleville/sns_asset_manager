@@ -11,6 +11,7 @@ use std::{
     collections::HashMap,
     fmt::{self, Display},
     hash::Hash,
+    marker::PhantomData,
     sync::Arc,
 };
 use vfs::VfsPath;
@@ -22,10 +23,40 @@ use vfs::VfsPath;
  *  ex: biome which includes weights for the chance of that biome, as well as a few biome_rules
  *  3. Script, a way to add simple custom functionality to asset or series of assets.
  */
+#[derive(Debug)]
+pub struct AssetId<T> {
+    id: u32,
+    _marker: std::marker::PhantomData<T>,
+}
+impl<T> Copy for AssetId<T> {}
 
-pub trait AssetGroup: Sized + 'static {
-    type ID: Ord + Eq + Hash + From<u32> + Into<u32> + Copy;
-    const STRUCT_NAME: &'static str;
+impl<T> Clone for AssetId<T> {
+    fn clone(&self) -> Self {
+        Self {
+            id: self.id,
+            _marker: PhantomData,
+        }
+    }
+}
+
+impl<T> From<u32> for AssetId<T> {
+    fn from(value: u32) -> Self {
+        Self {
+            id: value,
+            _marker: PhantomData,
+        }
+    }
+}
+impl<T> Display for AssetId<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.id)
+    }
+}
+
+impl<T> AssetId<T> {
+    pub fn get_id(&self) -> u32 {
+        return self.id;
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -37,8 +68,6 @@ pub enum DeclareType {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub enum AssetType {
-    #[serde(skip)]
-    Unknown,
     Declare(DeclareType),
     Static,
     #[serde(skip)]
@@ -102,13 +131,13 @@ pub struct RawAssetHeader {
     pub(super) struct_name: Option<String>,
     pub(super) data: ron::Value,
 }
+
 #[derive(Debug, Clone)]
 pub struct AssetHeader {
     pub(crate) path: VfsPath,
     pub(crate) asset_ref: AssetRef,
     pub(crate) asset_type: AssetType,
     pub(crate) struct_name: Option<String>,
-    pub(crate) id: u32,
     pub(crate) data: Option<ron::Value>,
 }
 
@@ -136,29 +165,26 @@ impl AssetHeader {
 
         let struct_name = match &raw.asset_type {
             AssetType::Declare(declare_type) => format!("Declare{}", declare_type.as_str()),
-            _ => raw
-                .struct_name
-                .unwrap()
-                .to_lowercase()
-                .to_upper_camel_case(),
+            _ => raw.struct_name.unwrap().to_upper_camel_case(),
         };
-
+        println!(
+            "{}",
+            AssetRef::new(namespace.clone(), name.clone()).to_string()
+        );
         Ok(Self {
             path,
             asset_ref: AssetRef::new(namespace, name),
             asset_type: raw.asset_type,
             struct_name: Some(struct_name),
-            id: 0,
             data: Some(raw.data),
         })
     }
-    pub fn new_script(path: VfsPath, path_name: String, namespace: String, id: u32) -> Self {
+    pub fn new_script(path: VfsPath, path_name: String, namespace: String) -> Self {
         Self {
             path,
             asset_ref: AssetRef::new(namespace, path_name),
             asset_type: AssetType::Script,
             struct_name: None,
-            id,
             data: None,
         }
     }
@@ -204,7 +230,7 @@ pub struct AssetRef {
     pub name: Arc<str>,
 }
 impl AssetRef {
-    fn new(name: String, namespace: String) -> Self {
+    fn new(namespace: String, name: String) -> Self {
         Self {
             namespace: namespace.into(),
             name: name.into(),

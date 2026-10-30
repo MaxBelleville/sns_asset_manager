@@ -1,4 +1,4 @@
-use heck::ToSnakeCase;
+use heck::ToUpperCamelCase;
 use proc_macro2::TokenStream;
 use quote::quote;
 
@@ -44,18 +44,29 @@ pub struct FieldInfo {
     pub name: syn::Ident,
     pub ty: syn::Type,
     pub asset_ty: Option<syn::Type>,
-    pub enum_ref: Option<String>,
     pub container: ContainerType,
 }
+pub enum ContainerType {
+    Single,
+    Option,
+    Vec,
+}
+
 impl FieldInfo {
     pub fn raw_field(&self) -> TokenStream {
         let name = &self.name;
         let ty = &self.ty;
-        if self.asset_ty.is_some() || self.enum_ref.is_some() {
+        if self.asset_ty.is_some() {
             return match self.container {
-                ContainerType::Single => quote! { pub #name: AssetRef },
-                ContainerType::Option => quote! { pub #name: Option<AssetRef> },
-                ContainerType::Vec => quote! { pub #name: Vec<AssetRef> },
+                ContainerType::Single => {
+                    quote! { pub #name: ::sns_asset_manager::prelude::AssetRef }
+                }
+                ContainerType::Option => {
+                    quote! { pub #name: Option<::sns_asset_manager::prelude::AssetRef> }
+                }
+                ContainerType::Vec => {
+                    quote! { pub #name: Vec<::sns_asset_manager::prelude::AssetRef> }
+                }
             };
         }
 
@@ -63,53 +74,24 @@ impl FieldInfo {
     }
     pub fn convert_field(&self) -> TokenStream {
         let name = &self.name;
+        let name_str = name.to_string();
 
-        if let Some(asset_ty) = &self.asset_ty {
+        if let Some(target_ty) = &self.asset_ty {
             return match self.container {
                 ContainerType::Single => quote! {
-                    let #name = registries.intern::<#asset_ty>(raw.#name);
+                    let #name = registry.resolve_asset_ref::<#target_ty>(&raw.#name,symbols, #name_str);
                 },
-
                 ContainerType::Option => quote! {
                     let #name = raw.#name.map(|r| {
-                       registries.intern::<#asset_ty>(r)
+                        registry.resolve_asset_ref::<#target_ty>(&r,symbols, #name_str)
                     });
                 },
-
                 ContainerType::Vec => quote! {
                     let #name = raw.#name
                         .into_iter()
-                        .map(|r| {
-                           registries.intern::<#asset_ty>(r)
-                        })
+                        .map(|r| registry.resolve_asset_ref::<#target_ty>(&r,symbols, #name_str))
                         .collect();
                 },
-            };
-        }
-
-        if let Some(enum_ref) = &self.enum_ref {
-            return match self.container {
-                ContainerType::Single => {
-                    let enum_str = enum_ref.as_str();
-                    quote! {
-                        let #name = AssetRef::from(#enum_str.to_string());
-                    }
-                }
-                ContainerType::Option => {
-                    let enum_str = enum_ref.as_str();
-                    quote! {
-                        let #name = raw.#name.as_ref().map(|_| AssetRef::from(#enum_str.to_string()));
-                    }
-                }
-                ContainerType::Vec => {
-                    let enum_str = enum_ref.as_str();
-                    quote! {
-                        let #name = raw.#name
-                            .iter()
-                            .map(|_| AssetRef::from(#enum_str.to_string()))
-                            .collect();
-                    }
-                }
             };
         }
 
@@ -118,7 +100,7 @@ impl FieldInfo {
     pub fn final_field(&self) -> TokenStream {
         let name = &self.name;
 
-        if self.asset_ty.is_some() || self.enum_ref.is_some() {
+        if self.asset_ty.is_some() {
             return quote! { #name };
         }
         quote! { #name: raw.#name }
@@ -143,34 +125,25 @@ impl FieldInfo {
     }
 }
 
-pub enum ContainerType {
-    Single,
-    Option,
-    Vec,
-}
-
-pub fn extract_container(ty: &syn::Type) -> ContainerType {
+fn parse_container_and_inner(ty: &syn::Type) -> (ContainerType, syn::Type) {
     if let syn::Type::Path(type_path) = ty {
-        let segment = type_path.path.segments.first().unwrap();
-
-        if segment.ident == "Option" {
-            if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
-                if let Some(syn::GenericArgument::Type(_inner)) = args.args.first() {
-                    return ContainerType::Option;
+        if let Some(segment) = type_path.path.segments.first() {
+            if segment.ident == "Option" {
+                if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
+                    if let Some(syn::GenericArgument::Type(inner)) = args.args.first() {
+                        return (ContainerType::Option, inner.clone());
+                    }
                 }
-            }
-        }
-
-        if segment.ident == "Vec" {
-            if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
-                if let Some(syn::GenericArgument::Type(_inner)) = args.args.first() {
-                    return ContainerType::Vec;
+            } else if segment.ident == "Vec" {
+                if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
+                    if let Some(syn::GenericArgument::Type(inner)) = args.args.first() {
+                        return (ContainerType::Vec, inner.clone());
+                    }
                 }
             }
         }
     }
-
-    ContainerType::Single
+    (ContainerType::Single, ty.clone())
 }
 
 pub fn analyze_asset_fields(fields: Vec<&syn::Field>) -> Vec<FieldInfo> {
@@ -180,31 +153,26 @@ pub fn analyze_asset_fields(fields: Vec<&syn::Field>) -> Vec<FieldInfo> {
         let name = field.ident.clone().unwrap();
         let ty = field.ty.clone();
 
-        let mut asset_ref = None;
-        let mut enum_ref = None;
+        let (container, inner_ty) = parse_container_and_inner(&ty);
 
-        for attr in &field.attrs {
-            if attr.path().is_ident("asset_ref") {
-                asset_ref = Some(
-                    attr.parse_args::<syn::Type>()
-                        .expect("asset_ref requires type"),
-                );
-            } else if attr.path().is_ident("enum_ref") {
-                enum_ref = Some(
-                    attr.parse_args::<syn::LitStr>()
-                        .expect("enum_ref requires a string literal")
-                        .value(),
-                );
+        let mut asset_ty = None;
+
+        if let syn::Type::Path(type_path) = &inner_ty {
+            if let Some(segment) = type_path.path.segments.last() {
+                if segment.ident == "AssetId" {
+                    if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
+                        if let Some(syn::GenericArgument::Type(target_type)) = args.args.first() {
+                            asset_ty = Some(target_type.clone());
+                        }
+                    }
+                }
             }
         }
-
-        let container = extract_container(&ty);
 
         result.push(FieldInfo {
             name,
             ty: ty,
-            asset_ty: asset_ref,
-            enum_ref,
+            asset_ty,
             container,
         });
     }
@@ -216,7 +184,7 @@ pub fn parse_struct_name_attr(input: &syn::DeriveInput) -> String {
     for attr in &input.attrs {
         if attr.path().is_ident("struct_name") {
             if let Ok(lit_str) = attr.parse_args::<syn::LitStr>() {
-                return lit_str.value();
+                return lit_str.value().to_upper_camel_case();
             } else {
                 panic!("#[struct_name(...)] requires a string literal");
             }
@@ -224,38 +192,16 @@ pub fn parse_struct_name_attr(input: &syn::DeriveInput) -> String {
     }
 
     // Default to snake_case struct name if not specified
-    input.ident.to_string().to_snake_case()
-}
-
-pub fn generate_id(id_name: &syn::Ident) -> TokenStream {
-    quote! {
-        #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-        pub struct #id_name(pub u32);
-
-        impl From<u32> for #id_name {
-            fn from(value: u32) -> Self {
-                Self(value)
-            }
-        }
-
-        impl Into<u32> for #id_name {
-            fn into(self) -> u32 {
-                self.0
-            }
-        }
-    }
+    input.ident.to_string().to_upper_camel_case()
 }
 
 pub fn generate_raw(
     raw_name: &syn::Ident,
     raw_fields: impl Iterator<Item = TokenStream>,
 ) -> TokenStream {
-    let raw_id = quote! { pub id: String };
-
     quote! {
         #[derive(serde::Deserialize)]
         struct #raw_name {
-            #raw_id,
             #( #raw_fields, )*
         }
     }
