@@ -1,7 +1,6 @@
 use std::{
     any::{Any, TypeId},
     collections::HashMap,
-    ops::Sub,
 };
 
 use super::{SymbolMap, assets};
@@ -38,7 +37,6 @@ pub fn initialize_registry() -> Registry {
 pub struct Registry {
     struct_map: HashMap<TypeId, Box<dyn Any>>,
     name_map: HashMap<String, TypeId>,
-    reverse_name: Vec<String>,
     loaders: HashMap<String, AssetLoaderFn>,
 }
 
@@ -49,7 +47,7 @@ impl Registry {
         symbols: &SymbolMap,
         field_name: &str,
     ) -> assets::AssetId<T> {
-        let asset_ref_str: String = asset_ref.clone().into();
+        let asset_ref_str: String = asset_ref.to_string();
         let raw_id = symbols
             .get(&asset_ref_str)
             .expect(&format!(
@@ -63,10 +61,15 @@ impl Registry {
 
     pub fn register<T: 'static>(&mut self, struct_name: String, loader: AssetLoaderFn) {
         let type_id = TypeId::of::<T>();
+
+        if self.name_map.contains_key(&struct_name) {
+            eprintln!("Duplicate struct_name skipping {}", struct_name);
+            return;
+        }
+
         self.struct_map
             .insert(type_id, Box::new(RegistryGlossary::<T>::default()));
         self.name_map.insert(struct_name.clone(), type_id);
-        self.reverse_name.push(struct_name.clone());
         self.loaders.insert(struct_name, loader);
     }
 
@@ -86,16 +89,22 @@ impl Registry {
     }
 
     pub fn lookup_asset<T: 'static>(&self, id: u32) -> Option<&T> {
-        let glossary = self.get().unwrap();
+        let Some(glossary) = self.get() else {
+            return None;
+        };
         glossary.get(assets::AssetId::<T>::from(id))
     }
     pub fn lookup_id<T: 'static>(&self, asset_ref: assets::AssetRef) -> Option<assets::AssetId<T>> {
-        let glossary = self.get().unwrap();
+        let Some(glossary) = self.get() else {
+            return None;
+        };
         glossary.lookup_id(&asset_ref)
     }
 
     pub fn lookup_string<T: 'static>(&self, asset_ref_str: String) -> Option<&T> {
-        let glossary = self.get().unwrap();
+        let Some(glossary) = self.get() else {
+            return None;
+        };
         glossary.lookup_string(asset_ref_str)
     }
 
@@ -160,7 +169,6 @@ impl<Asset> RegistryGlossary<Asset> {
 
     pub fn get(&self, asset_id: assets::AssetId<Asset>) -> Option<&Asset> {
         let idx = asset_id.get_id() as usize;
-        println!("{}", idx);
         self.assets.get(idx).and_then(|a| a.as_ref())
     }
 
@@ -184,8 +192,12 @@ impl<Asset> RegistryGlossary<Asset> {
         self.get(id)
     }
 
-    pub fn resolve(&self, id: u32) -> &assets::AssetRef {
+    pub fn resolve(&self, id: u32) -> Option<&assets::AssetRef> {
         let idx = id as usize;
-        &self.reverse_id[idx]
+        if self.reverse_id.len() > idx {
+            Some(&self.reverse_id[idx])
+        } else {
+            None
+        }
     }
 }

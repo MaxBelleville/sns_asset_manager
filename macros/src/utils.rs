@@ -1,41 +1,29 @@
 use heck::ToUpperCamelCase;
 use proc_macro2::TokenStream;
 use quote::quote;
+use syn::spanned::Spanned;
 
-pub fn extract_named_fields(input: &syn::DeriveInput) -> Vec<&syn::Field> {
+pub fn extract_named_fields(input: &syn::DeriveInput) -> syn::Result<Vec<&syn::Field>> {
     match &input.data {
         syn::Data::Struct(s) => match &s.fields {
-            syn::Fields::Named(named) => named.named.iter().collect(),
-            _ => panic!("Only named-field structs are supported"),
+            syn::Fields::Named(named) => Ok(named.named.iter().collect()),
+            _ => Err(syn::Error::new(
+                input.span(),
+                "Only named-field structs are supported",
+            )),
         },
-        _ => panic!("Only structs are supported"),
+        _ => Err(syn::Error::new(input.span(), "Only structs are supported")),
     }
 }
 
 pub fn is_copy_type(ty: &syn::Type) -> bool {
     match ty {
-        syn::Type::Path(type_path) => {
-            let ident = &type_path.path.segments.last().unwrap().ident;
-
-            matches!(
-                ident.to_string().as_str(),
-                // primitives
-                "u8" | "u16" | "u32" | "u64" |
-                "i8" | "i16" | "i32" | "i64" |
-                "f32" | "f64" | "Vec3" | "Vec4" | "Vec2" |
-                "bool" | "char" |
-
-                // common small types
-                "usize" | "isize"
-            )
-        }
-
-        // tuples like (f32, f32)
-        syn::Type::Tuple(tuple) => tuple.elems.iter().all(is_copy_type),
-
-        // references are Copy
+        // References are always Copy. Other types use a borrowed getter unless
+        // the field explicitly opts in with `#[copy_getter]`.
         syn::Type::Reference(_) => true,
-
+        // Keep recursive handling for tuples whose elements are themselves
+        // known to be Copy (currently references).
+        syn::Type::Tuple(tuple) => tuple.elems.iter().all(is_copy_type),
         _ => false,
     }
 }
@@ -45,6 +33,7 @@ pub struct FieldInfo {
     pub ty: syn::Type,
     pub asset_ty: Option<syn::Type>,
     pub container: ContainerType,
+    pub copy_getter: bool,
 }
 pub enum ContainerType {
     Single,
@@ -110,7 +99,7 @@ impl FieldInfo {
         let name = &self.name;
         let ty = &self.ty;
 
-        if is_copy_type(&self.ty) {
+        if self.copy_getter || is_copy_type(&self.ty) {
             return quote! {
                 pub fn #name(&self) -> #ty {
                     self.#name
@@ -127,17 +116,21 @@ impl FieldInfo {
 
 fn parse_container_and_inner(ty: &syn::Type) -> (ContainerType, syn::Type) {
     if let syn::Type::Path(type_path) = ty {
-        if let Some(segment) = type_path.path.segments.first() {
-            if segment.ident == "Option" {
-                if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
-                    if let Some(syn::GenericArgument::Type(inner)) = args.args.first() {
-                        return (ContainerType::Option, inner.clone());
-                    }
-                }
+        if let Some(segment) = type_path.path.segments.last() {
+            let container = if segment.ident == "Option" {
+                Some(ContainerType::Option)
             } else if segment.ident == "Vec" {
+                Some(ContainerType::Vec)
+            } else {
+                None
+            };
+
+            if let Some(container) = container {
                 if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
-                    if let Some(syn::GenericArgument::Type(inner)) = args.args.first() {
-                        return (ContainerType::Vec, inner.clone());
+                    if args.args.len() == 1 {
+                        if let Some(syn::GenericArgument::Type(inner)) = args.args.first() {
+                            return (container, inner.clone());
+                        }
                     }
                 }
             }
@@ -174,25 +167,32 @@ pub fn analyze_asset_fields(fields: Vec<&syn::Field>) -> Vec<FieldInfo> {
             ty: ty,
             asset_ty,
             container,
+            copy_getter: field
+                .attrs
+                .iter()
+                .any(|attr| attr.path().is_ident("copy_getter")),
         });
     }
 
     result
 }
 
-pub fn parse_struct_name_attr(input: &syn::DeriveInput) -> String {
+pub fn parse_struct_name_attr(input: &syn::DeriveInput) -> syn::Result<String> {
     for attr in &input.attrs {
         if attr.path().is_ident("struct_name") {
             if let Ok(lit_str) = attr.parse_args::<syn::LitStr>() {
-                return lit_str.value().to_upper_camel_case();
+                return Ok(lit_str.value().to_upper_camel_case());
             } else {
-                panic!("#[struct_name(...)] requires a string literal");
+                return Err(syn::Error::new(
+                    input.span(),
+                    "#[struct_name(...)] requires a string literal",
+                ));
             }
         }
     }
 
     // Default to snake_case struct name if not specified
-    input.ident.to_string().to_upper_camel_case()
+    Ok(input.ident.to_string().to_upper_camel_case())
 }
 
 pub fn generate_raw(
@@ -200,9 +200,20 @@ pub fn generate_raw(
     raw_fields: impl Iterator<Item = TokenStream>,
 ) -> TokenStream {
     quote! {
-        #[derive(serde::Deserialize)]
+        #[derive(::sns_asset_manager::__macros::serde::Deserialize)]
         struct #raw_name {
             #( #raw_fields, )*
         }
     }
+}
+/// Reject inputs that the generated implementation cannot support.
+pub(crate) fn verify_struct(input: &syn::DeriveInput) -> syn::Result<()> {
+    if !input.generics.params.is_empty() {
+        return Err(syn::Error::new_spanned(
+            &input.generics,
+            "MakeAsset does not support generic structs",
+        ));
+    }
+
+    Ok(())
 }

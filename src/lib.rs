@@ -1,9 +1,7 @@
 use serde::de::DeserializeOwned;
-use std::collections::HashMap;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::ops::Add;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use vfs::{PhysicalFS, VfsPath, ZipFS};
 
 use ron::extensions::Extensions;
@@ -14,28 +12,35 @@ mod registry;
 
 use assets::*;
 
+#[doc(hidden)]
+pub mod __macros {
+    pub use crate::registry::{AssetGroup, AssetRegistration};
+    pub use inventory;
+    pub use ron;
+    pub use serde;
+}
+
 pub mod prelude {
-    pub use super::assets::AssetId;
-    pub use super::assets::AssetRef;
-    pub use super::process_assets;
-    pub use super::registry::AssetGroup;
-    pub use super::registry::AssetRegistration;
-    pub use super::registry::Registry;
-    pub use super::registry::initialize_registry;
+    pub use crate::assets::AssetId;
+    pub use crate::assets::AssetRef;
+    pub use crate::process_assets;
+    pub use crate::registry::Registry;
+    pub use crate::registry::initialize_registry;
     pub use macros::MakeAsset;
 }
 
 pub type SymbolMap = HashMap<String, u32>;
+pub type PathGroups = (Vec<VfsPath>, Vec<VfsPath>, Vec<VfsPath>);
 
 pub fn process_assets(
     root: &Path,
     registry: &mut registry::Registry,
     use_current_dir: bool,
-) -> Result<(), String> {
+) -> Result<AssetBundleNode, String> {
     let vfs_path = get_vfs_path(root, use_current_dir)?;
     let mut processed_files = HashSet::new();
     let mut collected_assets = HashMap::new();
-    recursive_discovery(
+    let asset_bundles = recursive_discovery(
         &mut processed_files,
         &mut collected_assets,
         vfs_path,
@@ -59,7 +64,7 @@ pub fn process_assets(
         }
     }
 
-    Ok(())
+    Ok(asset_bundles)
 }
 ///Get path from zip or a directory if zip.
 ///If a zip, return a ZipFS. If directory, return a PhysicalFS filesystem.
@@ -77,16 +82,16 @@ fn get_vfs_path(root: &Path, use_current_dir: bool) -> Result<VfsPath, String> {
         ));
     }
 
-    if root.is_file() {
-        if is_zip(root) {
+    if path_buf.is_file() {
+        if is_zip(&path_buf) {
             //If zip file, create a ZipFS from the file and return.
             return Ok(ZipFS::new(move || fs::File::open(&path_buf).unwrap()).into());
         }
         eprintln!(
             "Warning: File {} is not a zip file. Using parent directory instead.",
-            root.display()
+            path_buf.display()
         );
-        path_buf = root.parent().unwrap_or(root).to_path_buf();
+        path_buf = path_buf.parent().unwrap_or(root).to_path_buf();
     }
     if path_buf.is_dir() {
         Ok(PhysicalFS::new(path_buf).into())
@@ -98,8 +103,8 @@ fn get_vfs_path(root: &Path, use_current_dir: bool) -> Result<VfsPath, String> {
     }
 }
 
-fn is_zip(root: &Path) -> bool {
-    fs::File::open(&root)
+fn is_zip(path_buf: &PathBuf) -> bool {
+    fs::File::open(&path_buf)
         .ok()
         .and_then(|file| zip::ZipArchive::new(file).ok())
         .is_some()
@@ -112,7 +117,10 @@ fn split_and_categorize_headers(
     let mut symbol_map = SymbolMap::new();
     let mut struct_counter = HashMap::<String, u32>::new();
 
-    for (asset_ref, header) in collected_assets {
+    let mut assets_vec: Vec<_> = collected_assets.into_iter().collect();
+    assets_vec.sort_by(|(a, _), (b, _)| a.cmp(b));
+
+    for (asset_ref, header) in assets_vec {
         if let Some(ref struct_name) = header.struct_name {
             let count = struct_counter.entry(struct_name.clone()).or_insert(0);
             *count += 1;
@@ -153,8 +161,11 @@ fn recursive_discovery(
     path: VfsPath,
     parent_bundle: AssetBundle,
     is_root: bool,
-) -> Result<(), String> {
-    let (bundle_paths, ron_paths, rhai_paths) = read_split_dir(&path);
+) -> Result<AssetBundleNode, String> {
+    if path.is_dir().is_err() {
+        return Err(format!("Path {} is not a directory", path.as_str()));
+    }
+    let (bundle_paths, ron_paths, rhai_paths) = read_split_dir(&path)?;
     //Error checking
     // Check if
     if bundle_paths.len() != 1 && is_root {
@@ -184,10 +195,7 @@ fn recursive_discovery(
     };
 
     combine_bundles(&mut asset_bundle, &parent_bundle)?;
-
-    let mut asset_headers = Vec::new();
     let mut children = Vec::new();
-
     let mut add_asset_paths = false;
 
     if bundle_paths.is_empty() {
@@ -241,13 +249,12 @@ fn recursive_discovery(
                     );
                 } else {
                     processed_files.insert(final_path_str);
-                    let headers = gather_headers(
+                    gather_headers(
                         &mut *collected_assets,
                         include_path,
                         asset_bundle.full_namespace.clone(),
                         is_rhai,
                     )?;
-                    asset_headers.extend(headers);
                 }
             } else if include_path.is_dir().is_ok() {
                 if include_path != path {
@@ -274,19 +281,22 @@ fn recursive_discovery(
                     final_path_str, asset_bundle.full_namespace
                 );
             } else {
-                let headers = gather_headers(
+                gather_headers(
                     &mut *collected_assets,
                     asset_path,
                     asset_bundle.full_namespace.clone(),
                     final_path_str.ends_with(".rhai"),
                 )?;
                 processed_files.insert(final_path_str);
-                asset_headers.extend(headers);
             }
         }
     }
 
-    Ok(())
+    Ok(AssetBundleNode {
+        path,
+        bundle: asset_bundle,
+        children,
+    })
 }
 
 fn gather_headers(
@@ -294,24 +304,21 @@ fn gather_headers(
     path: VfsPath,
     namespace: String,
     is_rhai: bool,
-) -> Result<Vec<AssetHeader>, String> {
-    let mut final_headers = Vec::new();
-
+) -> Result<(), String> {
     let headers = if is_rhai {
         create_rhai_header(path, namespace)
     } else {
         create_ron_headers(path, namespace)?
     };
     for header in headers {
-        let key: String = header.asset_ref.clone().into();
+        let key: String = header.asset_ref.to_string();
         if collected_assets.contains_key(&key) {
             eprintln!("Warning duplicate asset {} found skipping", key);
         } else {
-            final_headers.push(header.clone());
             collected_assets.insert(key, header);
         }
     }
-    Ok(final_headers)
+    Ok(())
 }
 
 /// Parses a .rhai file and returns a single script header
@@ -335,7 +342,7 @@ fn create_ron_headers(path: VfsPath, namespace: String) -> Result<Vec<AssetHeade
     for (i, raw) in raw_headers.into_iter().enumerate() {
         let mut full_path_name = path_name.clone();
         if i > 0 {
-            full_path_name += &i.add(1).to_string();
+            full_path_name += &(i + 1).to_string();
         }
         headers.push(AssetHeader::new(
             raw,
@@ -348,12 +355,16 @@ fn create_ron_headers(path: VfsPath, namespace: String) -> Result<Vec<AssetHeade
 }
 
 /// Read and split dir into 3 vectors, .bundle.ron, ron and rhai files
-fn read_split_dir(path: &VfsPath) -> (Vec<VfsPath>, Vec<VfsPath>, Vec<VfsPath>) {
+fn read_split_dir(path: &VfsPath) -> Result<PathGroups, String> {
     let mut bundle_paths = Vec::new();
     let mut ron_paths = Vec::new();
     let mut rhai_paths = Vec::new();
 
-    for file_paths in path.read_dir().unwrap() {
+    let Ok(file_paths_iter) = path.read_dir() else {
+        return Err(format!("Could not read directory {}", path.as_str()));
+    };
+
+    for file_paths in file_paths_iter {
         if file_paths.as_str().ends_with(".bundle.ron") {
             bundle_paths.push(file_paths);
         } else if file_paths.as_str().ends_with(".ron") {
@@ -362,7 +373,7 @@ fn read_split_dir(path: &VfsPath) -> (Vec<VfsPath>, Vec<VfsPath>, Vec<VfsPath>) 
             rhai_paths.push(file_paths);
         }
     }
-    (bundle_paths, ron_paths, rhai_paths)
+    Ok((bundle_paths, ron_paths, rhai_paths))
 }
 
 fn parse_ron_file<T>(vfspath: &VfsPath, error_str: &str) -> Result<T, String>
@@ -372,8 +383,12 @@ where
     let options = Options::default()
         .with_default_extension(Extensions::IMPLICIT_SOME | Extensions::UNWRAP_VARIANT_NEWTYPES);
 
+    let Ok(open_path) = vfspath.open_file() else {
+        return Err(format!("Could not open path {}", vfspath.as_str()));
+    };
+
     options
-        .from_reader(vfspath.open_file().unwrap())
+        .from_reader(open_path)
         .map_err(|e| format!("{} {}: {}", error_str, vfspath.as_str(), e))
 }
 ///Reads in parent and current asset bundle, and appends namespace where necessary
