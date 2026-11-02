@@ -48,15 +48,22 @@ fn make(
         #raw_struct
 
         impl #name {
-          pub fn from_raw(
+          pub fn try_from_raw(
                 raw: #raw_name,
                 registry: &mut ::sns_asset_manager::prelude::Registry,
                 symbols: &std::collections::HashMap<String,u32>
-            ) -> Self {
+            ) -> Result<Self, String> {
               #( #convert_fields )*
-              Self {
+              Ok(Self {
                   #( #final_fields, )*
+              })
               }
+              pub fn from_raw(
+                raw: #raw_name,
+                registry: &mut ::sns_asset_manager::prelude::Registry,
+                symbols: &std::collections::HashMap<String,u32>
+              ) -> Self {
+                Self::try_from_raw(raw, registry, symbols).expect("Failed to convert raw asset")
               }
               #( #getters )*
 
@@ -64,33 +71,19 @@ fn make(
 
           impl ::sns_asset_manager::__macros::AssetGroup for #name {
               const STRUCT_NAME: &'static str = #struct_name;
-              fn load_ron_asset(
-                      registry: &mut ::sns_asset_manager::prelude::Registry,
-                      asset_ref: ::sns_asset_manager::prelude::AssetRef,
-                      symbols: &std::collections::HashMap<String,u32>,
-                      data: ::sns_asset_manager::__macros::ron::Value,
-                  ) -> Result<(), String> {
-                  		let asset_ref_str: String = asset_ref.to_string();
-                      let raw: #raw_name = data.into_rust()
-                          .map_err(|e| format!("{} - {}: {}", #name::STRUCT_NAME, asset_ref.to_string(), e))?;
-
-                      let Some(id) = symbols.get(&asset_ref_str) else {
-                      	return Err(format!("Error id reference failed to map to asset {} - {} ",  #name::STRUCT_NAME, asset_ref.to_string()));
-                      };
-                      let asset = #name::from_raw(raw, registry, symbols);
-
-                      let glossary = registry.get_mut::<#name>()
-                          .ok_or_else(|| format!("Glossary not found for type: {}", #name::STRUCT_NAME))?;
-
-                      glossary.insert_from_header(asset, asset_ref, id.clone())?;
-                      Ok(())
-                  }
+              type Raw = #raw_name;
+              fn from_raw(
+                  raw: Self::Raw,
+                  registry: &mut ::sns_asset_manager::prelude::Registry,
+                  symbols: &std::collections::HashMap<String,u32>,
+              ) -> Result<Self, String> {
+                  Self::try_from_raw(raw, registry, symbols)
+              }
           }
           ::sns_asset_manager::__macros::inventory::submit! {
               ::sns_asset_manager::__macros::AssetRegistration {
                   register_fn: |registry| {
-                      registry.register::<#name>(#struct_name.to_string(),
-                      |reg,asset_ref, symbols, data| <#name as ::sns_asset_manager::__macros::AssetGroup>::load_ron_asset(reg,asset_ref, symbols, data));
+                      registry.__register::<#name>();
                   }
               }
           };

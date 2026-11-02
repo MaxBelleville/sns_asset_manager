@@ -1,0 +1,11 @@
+[(
+asset_type:Static,
+struct_name:"BasicEnum",
+data: (is_loaded:true, flags:Enum(ref:"core:flags",values:["enable_b"])) //flags will only enable what we need from declare.
+),
+(
+asset_type:Static,
+struct_name:"BasicFlag",
+data: (is_loaded:true,tags:Tag("core:basic-all-tag"))
+)
+]

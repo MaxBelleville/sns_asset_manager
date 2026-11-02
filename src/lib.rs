@@ -8,12 +8,17 @@ use ron::extensions::Extensions;
 use ron::options::Options;
 
 mod assets;
+mod declares;
 mod registry;
 
 use assets::*;
 
+pub use assets::{AssetId, AssetRef};
+
 #[doc(hidden)]
 pub mod __macros {
+    pub use crate::declares::EnumSelectionRaw;
+    pub use crate::declares::TagSelectionRaw;
     pub use crate::registry::{AssetGroup, AssetRegistration};
     pub use inventory;
     pub use ron;
@@ -23,6 +28,7 @@ pub mod __macros {
 pub mod prelude {
     pub use crate::assets::AssetId;
     pub use crate::assets::AssetRef;
+    pub use crate::declares::{DeclareEnum, DeclareTag, EnumFlags};
     pub use crate::process_assets;
     pub use crate::registry::Registry;
     pub use crate::registry::initialize_registry;
@@ -49,23 +55,35 @@ pub fn process_assets(
     )?;
 
     let (processed, symbols) = split_and_categorize_headers(collected_assets)?;
+
+    // Declarations are loaded first because static fields may depend on them.
+    for (struct_name, headers) in processed.declares {
+        let loader = *registry.get_loader(&struct_name).ok_or_else(|| {
+            format!(
+                "No registered asset loader found for declaration type: '{}'",
+                struct_name,
+            )
+        })?;
+        for header in headers {
+            loader(registry, header.asset_ref, &symbols, header.data.unwrap())?;
+        }
+    }
+
     for (struct_name, headers) in processed.statics {
-        // 1. Fetch the correct loader for this specific struct type
         let loader = *registry.get_loader(&struct_name).ok_or_else(|| {
             format!(
                 "No registered asset loader found for struct type: '{}'",
                 struct_name
             )
         })?;
-
         for header in headers {
-            // 2. Invoke only the correct loader with its pre-calculated ID and data
             loader(registry, header.asset_ref, &symbols, header.data.unwrap())?;
         }
     }
 
     Ok(asset_bundles)
 }
+
 ///Get path from zip or a directory if zip.
 ///If a zip, return a ZipFS. If directory, return a PhysicalFS filesystem.
 fn get_vfs_path(root: &Path, use_current_dir: bool) -> Result<VfsPath, String> {

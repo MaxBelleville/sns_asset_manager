@@ -1,0 +1,5 @@
+(
+		asset_name: "basic-all-tag",
+    asset_type: Declare(Tag),
+    data: (items: ["core:asset", "core:flags"]),
+)

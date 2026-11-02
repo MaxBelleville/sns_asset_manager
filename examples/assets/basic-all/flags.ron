@@ -1,0 +1,4 @@
+(
+asset_type:Declare(Enum),
+data: (items:["enable_a","enable_b","enable_c","enable_d"])//Provides all available enums.
+),

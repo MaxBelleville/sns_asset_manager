@@ -1,3 +1,4 @@
+use serde::de::DeserializeOwned;
 use std::{
     any::{Any, TypeId},
     collections::HashMap,
@@ -7,12 +8,37 @@ use super::{SymbolMap, assets};
 
 pub trait AssetGroup: Sized + 'static {
     const STRUCT_NAME: &'static str;
+    type Raw: DeserializeOwned;
+
+    fn from_raw(
+        raw: Self::Raw,
+        registry: &mut Registry,
+        symbols: &SymbolMap,
+    ) -> Result<Self, String>;
+
     fn load_ron_asset(
         registry: &mut Registry,
         asset_ref: assets::AssetRef,
         symbols: &SymbolMap,
         data: ron::Value,
-    ) -> Result<(), String>;
+    ) -> Result<(), String> {
+        let asset_ref_string = asset_ref.to_string();
+        let raw: Self::Raw = data
+            .into_rust()
+            .map_err(|error| format!("{} - {}: {}", Self::STRUCT_NAME, asset_ref_string, error))?;
+        let id = symbols.get(&asset_ref_string).ok_or_else(|| {
+            format!(
+                "No assigned asset ID for {} ({})",
+                Self::STRUCT_NAME,
+                asset_ref_string
+            )
+        })?;
+        let asset = Self::from_raw(raw, registry, symbols)?;
+        let glossary = registry
+            .get_mut::<Self>()
+            .ok_or_else(|| format!("Glossary not found for type: {}", Self::STRUCT_NAME))?;
+        glossary.insert_from_header(asset, asset_ref, *id)
+    }
 }
 
 pub type AssetLoaderFn =
@@ -58,19 +84,19 @@ impl Registry {
 
         assets::AssetId::<T>::from(raw_id)
     }
-
-    pub fn register<T: 'static>(&mut self, struct_name: String, loader: AssetLoaderFn) {
+    #[doc(hidden)]
+    pub fn __register<T: AssetGroup>(&mut self) {
         let type_id = TypeId::of::<T>();
 
-        if self.name_map.contains_key(&struct_name) {
-            eprintln!("Duplicate struct_name skipping {}", struct_name);
+        if self.name_map.contains_key(&T::STRUCT_NAME.to_string()) {
+            eprintln!("Duplicate struct_name skipping {}", T::STRUCT_NAME);
             return;
         }
-
+        let loader = T::load_ron_asset;
         self.struct_map
             .insert(type_id, Box::new(RegistryGlossary::<T>::default()));
-        self.name_map.insert(struct_name.clone(), type_id);
-        self.loaders.insert(struct_name, loader);
+        self.name_map.insert(T::STRUCT_NAME.to_string(), type_id);
+        self.loaders.insert(T::STRUCT_NAME.to_string(), loader);
     }
 
     pub fn get_from_type(&mut self, struct_name: String) -> Option<&mut Box<dyn Any + 'static>> {
@@ -168,12 +194,12 @@ impl<Asset> RegistryGlossary<Asset> {
     }
 
     pub fn get(&self, asset_id: assets::AssetId<Asset>) -> Option<&Asset> {
-        let idx = asset_id.get_id() as usize;
+        let idx = asset_id.get() as usize;
         self.assets.get(idx).and_then(|a| a.as_ref())
     }
 
     pub fn get_mut(&mut self, asset_id: assets::AssetId<Asset>) -> Option<&mut Asset> {
-        let idx = asset_id.get_id() as usize;
+        let idx = asset_id.get() as usize;
         self.assets.get_mut(idx).and_then(|a| a.as_mut())
     }
 

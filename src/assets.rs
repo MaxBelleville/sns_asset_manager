@@ -269,7 +269,7 @@ impl<T> Display for AssetId<T> {
 }
 
 impl<T> AssetId<T> {
-    pub fn get_id(&self) -> u32 {
+    pub fn get(&self) -> u32 {
         return self.id;
     }
 }
