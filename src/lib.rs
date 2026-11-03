@@ -10,28 +10,28 @@ use ron::options::Options;
 mod assets;
 mod declares;
 mod registry;
+mod scripts;
 
-use assets::*;
-
-pub use assets::{AssetId, AssetRef};
+pub use inventory;
+pub use rhai;
+pub use ron;
+pub use serde;
 
 #[doc(hidden)]
 pub mod __macros {
-    pub use crate::declares::EnumSelectionRaw;
-    pub use crate::declares::TagSelectionRaw;
+    pub use crate::declares::{EnumSelectionRaw, TagSelectionRaw};
+    pub use crate::inventory;
     pub use crate::registry::{AssetGroup, AssetRegistration};
-    pub use inventory;
-    pub use ron;
-    pub use serde;
+    pub use crate::serde;
 }
 
 pub mod prelude {
-    pub use crate::assets::AssetId;
-    pub use crate::assets::AssetRef;
+    pub use crate::assets::{AssetId, AssetRef};
     pub use crate::declares::{DeclareEnum, DeclareTag, EnumFlags};
     pub use crate::process_assets;
-    pub use crate::registry::Registry;
-    pub use crate::registry::initialize_registry;
+    pub use crate::registry::{AssetGroup, GlossaryItem, Registry, initialize_registry};
+    pub use crate::rhai::Dynamic;
+    pub use crate::scripts::{RhaiScript, ScriptRuntime};
     pub use macros::MakeAsset;
 }
 
@@ -42,7 +42,7 @@ pub fn process_assets(
     root: &Path,
     registry: &mut registry::Registry,
     use_current_dir: bool,
-) -> Result<AssetBundleNode, String> {
+) -> Result<assets::AssetBundleNode, String> {
     let vfs_path = get_vfs_path(root, use_current_dir)?;
     let mut processed_files = HashSet::new();
     let mut collected_assets = HashMap::new();
@@ -50,7 +50,7 @@ pub fn process_assets(
         &mut processed_files,
         &mut collected_assets,
         vfs_path,
-        AssetBundle::default(),
+        assets::AssetBundle::default(),
         true,
     )?;
 
@@ -79,6 +79,10 @@ pub fn process_assets(
         for header in headers {
             loader(registry, header.asset_ref, &symbols, header.data.unwrap())?;
         }
+    }
+
+    for header in processed.scripts {
+        registry.load_script(header, &symbols)?;
     }
 
     Ok(asset_bundles)
@@ -129,10 +133,12 @@ fn is_zip(path_buf: &PathBuf) -> bool {
 }
 
 fn split_and_categorize_headers(
-    collected_assets: HashMap<String, AssetHeader>,
-) -> Result<(ProcessedAssets, SymbolMap), String> {
-    let mut processed = ProcessedAssets::default();
+    collected_assets: HashMap<String, assets::AssetHeader>,
+) -> Result<(assets::ProcessedAssets, SymbolMap), String> {
+    let mut processed = assets::ProcessedAssets::default();
+
     let mut symbol_map = SymbolMap::new();
+    //  let mut asset_types = HashMap::new();
     let mut struct_counter = HashMap::<String, u32>::new();
 
     let mut assets_vec: Vec<_> = collected_assets.into_iter().collect();
@@ -142,10 +148,11 @@ fn split_and_categorize_headers(
         if let Some(ref struct_name) = header.struct_name {
             let count = struct_counter.entry(struct_name.clone()).or_insert(0);
             *count += 1;
+            //   asset_types.insert(asset_ref.clone(), struct_name.clone());
             symbol_map.insert(asset_ref, (*count).saturating_sub(1));
         }
         match header.asset_type {
-            AssetType::Declare(_) => {
+            assets::AssetType::Declare(_) => {
                 let struct_name = header.struct_name.as_ref().unwrap();
                 processed
                     .declares
@@ -153,7 +160,7 @@ fn split_and_categorize_headers(
                     .or_default()
                     .push(header);
             }
-            AssetType::Static => {
+            assets::AssetType::Static => {
                 let struct_name = header.struct_name.as_ref().unwrap();
 
                 // Group into the HashMap by struct_name
@@ -163,8 +170,7 @@ fn split_and_categorize_headers(
                     .or_default()
                     .push(header);
             }
-            AssetType::Script => {
-                // Scripts already had their IDs handled during parsing
+            assets::AssetType::Script => {
                 processed.scripts.push(header);
             }
         }
@@ -175,11 +181,11 @@ fn split_and_categorize_headers(
 
 fn recursive_discovery(
     processed_files: &mut HashSet<String>,
-    collected_assets: &mut HashMap<String, AssetHeader>,
+    collected_assets: &mut HashMap<String, assets::AssetHeader>,
     path: VfsPath,
-    parent_bundle: AssetBundle,
+    parent_bundle: assets::AssetBundle,
     is_root: bool,
-) -> Result<AssetBundleNode, String> {
+) -> Result<assets::AssetBundleNode, String> {
     if path.is_dir().is_err() {
         return Err(format!("Path {} is not a directory", path.as_str()));
     }
@@ -206,10 +212,10 @@ fn recursive_discovery(
         ));
     }
 
-    let mut asset_bundle: AssetBundle = if bundle_paths.len() == 1 {
+    let mut asset_bundle: assets::AssetBundle = if bundle_paths.len() == 1 {
         parse_ron_file(&bundle_paths[0], "Failed to parse bundle file")?
     } else {
-        AssetBundle::default()
+        assets::AssetBundle::default()
     };
 
     combine_bundles(&mut asset_bundle, &parent_bundle)?;
@@ -310,7 +316,7 @@ fn recursive_discovery(
         }
     }
 
-    Ok(AssetBundleNode {
+    Ok(assets::AssetBundleNode {
         path,
         bundle: asset_bundle,
         children,
@@ -318,7 +324,7 @@ fn recursive_discovery(
 }
 
 fn gather_headers(
-    collected_assets: &mut HashMap<String, AssetHeader>,
+    collected_assets: &mut HashMap<String, assets::AssetHeader>,
     path: VfsPath,
     namespace: String,
     is_rhai: bool,
@@ -340,19 +346,27 @@ fn gather_headers(
 }
 
 /// Parses a .rhai file and returns a single script header
-fn create_rhai_header(path: VfsPath, namespace: String) -> Vec<AssetHeader> {
+fn create_rhai_header(path: VfsPath, namespace: String) -> Vec<assets::AssetHeader> {
     let script_name = path.filename().replace(".rhai", "");
-    vec![AssetHeader::new_script(path, namespace, script_name)]
+    vec![assets::AssetHeader::new_script(
+        path,
+        script_name,
+        namespace,
+    )]
 }
 
 /// Parses a .ron file (which can be a single asset or a list) and returns headers
-fn create_ron_headers(path: VfsPath, namespace: String) -> Result<Vec<AssetHeader>, String> {
-    let raw_source: RawAssetSource = parse_ron_file(&path, "Failed to parse ron asset file")?;
+fn create_ron_headers(
+    path: VfsPath,
+    namespace: String,
+) -> Result<Vec<assets::AssetHeader>, String> {
+    let raw_source: assets::RawAssetSource =
+        parse_ron_file(&path, "Failed to parse ron asset file")?;
     let path_name = path.filename().replace(".ron", "");
 
     let raw_headers = match raw_source {
-        RawAssetSource::Single(raw) => vec![raw],
-        RawAssetSource::List(list) => list,
+        assets::RawAssetSource::Single(raw) => vec![raw],
+        assets::RawAssetSource::List(list) => list,
     };
 
     let mut headers = Vec::new();
@@ -362,7 +376,7 @@ fn create_ron_headers(path: VfsPath, namespace: String) -> Result<Vec<AssetHeade
         if i > 0 {
             full_path_name += &(i + 1).to_string();
         }
-        headers.push(AssetHeader::new(
+        headers.push(assets::AssetHeader::new(
             raw,
             path.clone(),
             full_path_name,
@@ -410,7 +424,10 @@ where
         .map_err(|e| format!("{} {}: {}", error_str, vfspath.as_str(), e))
 }
 ///Reads in parent and current asset bundle, and appends namespace where necessary
-fn combine_bundles(asset: &mut AssetBundle, parent: &AssetBundle) -> Result<(), String> {
+fn combine_bundles(
+    asset: &mut assets::AssetBundle,
+    parent: &assets::AssetBundle,
+) -> Result<(), String> {
     //Combine namespace
     if parent.namespace.is_none() && asset.namespace.is_some() {
         asset.full_namespace = asset.namespace.clone().unwrap();

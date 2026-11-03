@@ -151,7 +151,7 @@ impl AssetHeader {
             path,
             asset_ref: AssetRef::new(namespace, path_name),
             asset_type: AssetType::Script,
-            struct_name: None,
+            struct_name: Some("RhaiScript".to_owned()),
             data: None,
         }
     }
@@ -238,7 +238,7 @@ pub struct ProcessedAssets {
     pub(crate) scripts: Vec<AssetHeader>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct AssetId<T> {
     id: u32,
     _marker: std::marker::PhantomData<T>,

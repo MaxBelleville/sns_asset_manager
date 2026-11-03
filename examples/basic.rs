@@ -19,5 +19,9 @@ pub fn main() {
     println!("current path {}", path.display());
     process_assets(&path, &mut registry, false).map_err(|e| panic!("{}", e));
     let basic = registry.lookup_asset::<BasicB>(0).unwrap();
-    println!("is_loaded {}", basic.parent().get(0).unwrap())
+    println!(
+        "is_loaded {} parent {}",
+        basic.is_loaded,
+        basic.parent.get(0).unwrap()
+    )
 }

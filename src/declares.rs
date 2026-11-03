@@ -1,7 +1,7 @@
-use crate::registry::{AssetGroup, AssetRegistration, Registry};
-use crate::{AssetRef, SymbolMap};
+use super::registry::{AssetGroup, AssetRegistration, GlossaryItem, Registry};
+use super::{SymbolMap, assets};
 use serde::Deserialize;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// Runtime definition for a declared set of enum values.
 #[derive(Debug, Clone)]
@@ -73,7 +73,7 @@ impl AssetGroup for DeclareEnum {
 /// A selected subset of one registered enum declaration.
 #[derive(Debug, Clone, Copy)]
 pub struct EnumFlags {
-    declaration: crate::AssetId<DeclareEnum>,
+    declaration: assets::AssetId<DeclareEnum>,
     bits: u32,
 }
 
@@ -83,13 +83,11 @@ impl EnumFlags {
         let reference = raw.reference;
         let values = raw.values;
 
-        let declaration = registry
-            .lookup_id::<DeclareEnum>(reference.clone())
+        let item = registry
+            .lookup_item::<DeclareEnum>(&reference)
             .ok_or_else(|| format!("Missing Declare(Enum) asset {}", reference))?;
-
-        let definition = registry
-            .lookup_asset::<DeclareEnum>(declaration.get())
-            .ok_or_else(|| format!("Declare(Enum) asset {} is not loaded", reference))?;
+        let declaration = assets::AssetId::<DeclareEnum>::from(item.get_id());
+        let definition = item.get();
 
         let mut bits = 0u32;
         let mut selected = HashSet::new();
@@ -109,7 +107,7 @@ impl EnumFlags {
         Ok(Self { declaration, bits })
     }
 
-    pub fn declaration_id(&self) -> crate::AssetId<DeclareEnum> {
+    pub fn declaration_id(&self) -> assets::AssetId<DeclareEnum> {
         self.declaration
     }
 
@@ -136,35 +134,42 @@ impl EnumFlags {
 #[derive(Debug, Deserialize)]
 pub struct EnumSelectionRaw {
     #[serde(rename = "ref")]
-    reference: AssetRef,
+    reference: assets::AssetRef,
     values: Vec<String>,
 }
 
 /// Raw form of `Tag("namespace:name")` in a static asset field.
 #[doc(hidden)]
 #[derive(Debug, Deserialize)]
-pub struct TagSelectionRaw(pub AssetRef);
+pub struct TagSelectionRaw(pub assets::AssetRef);
 
 /// A tag declaration groups asset references for consumers to query.
 #[derive(Debug, Clone)]
 pub struct DeclareTag {
-    items: Vec<AssetRef>,
+    items: HashMap<String, Vec<assets::AssetRef>>,
 }
 
 impl DeclareTag {
-    pub fn items(&self) -> &[AssetRef] {
+    pub fn items(&self) -> &HashMap<String, Vec<assets::AssetRef>> {
         &self.items
     }
 
-    pub fn contains(&self, asset_ref: &AssetRef) -> bool {
-        self.items.contains(asset_ref)
+    pub fn contains(&self, asset_ref: &assets::AssetRef) -> bool {
+        self.items.values().any(|items| items.contains(asset_ref))
+    }
+
+    pub fn items_for_type(&self, struct_name: &str) -> &[assets::AssetRef] {
+        self.items
+            .get(struct_name)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
     }
 }
 
 #[doc(hidden)]
 #[derive(Debug, Deserialize)]
 pub struct DeclareTagRaw {
-    items: Vec<AssetRef>,
+    items: HashMap<String, Vec<assets::AssetRef>>,
 }
 
 impl AssetGroup for DeclareTag {
@@ -177,7 +182,7 @@ impl AssetGroup for DeclareTag {
         symbols: &SymbolMap,
     ) -> Result<Self, String> {
         let mut members = HashSet::new();
-        for item in &raw.items {
+        for item in raw.items.values().flatten() {
             if !symbols.contains_key(&item.to_string()) {
                 return Err(format!("Declare(Tag) references missing asset {}", item));
             }
@@ -186,6 +191,32 @@ impl AssetGroup for DeclareTag {
             }
         }
         Ok(Self { items: raw.items })
+    }
+}
+
+impl assets::AssetId<DeclareTag> {
+    /// Resolves the members of this tag as typed glossary items.
+    pub fn items<'a, A: AssetGroup>(
+        &self,
+        registry: &'a Registry,
+    ) -> Result<Vec<&'a GlossaryItem<A>>, String> {
+        let tag = registry
+            .get_item::<DeclareTag>(self.get() as usize)
+            .ok_or_else(|| format!("Declare(Tag) ID {} is not loaded", self.get()))?;
+
+        tag.get()
+            .items_for_type(A::STRUCT_NAME)
+            .iter()
+            .map(|asset_ref| {
+                registry.lookup_item::<A>(asset_ref).ok_or_else(|| {
+                    format!(
+                        "Tag member {} is not loaded as type '{}'",
+                        asset_ref,
+                        A::STRUCT_NAME
+                    )
+                })
+            })
+            .collect()
     }
 }
 
