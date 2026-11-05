@@ -6,6 +6,7 @@ use std::{
     collections::HashMap,
 };
 
+use crate::assets::AssetRef;
 use crate::scripts::RhaiScript;
 
 use super::scripts;
@@ -23,6 +24,11 @@ inventory::collect!(AssetRegistration);
 pub trait AssetGroup: Sized + 'static {
     const STRUCT_NAME: &'static str;
     type Raw: DeserializeOwned;
+    type View: Clone + Send + Sync;
+
+    fn view_from_raw(_raw: &Self::Raw, _registry: &Registry) -> Result<Option<Dynamic>, String> {
+        Ok(None)
+    }
 
     fn from_raw(
         raw: Self::Raw,
@@ -49,11 +55,20 @@ pub trait AssetGroup: Sized + 'static {
             )
         })?;
 
+        let view = Self::view_from_raw(&raw, registry)?;
+
         let asset = Self::from_raw(raw, registry, symbols)?;
+        let view_ref = asset_ref.clone();
+
         let glossary = registry
             .get_mut::<Self>()
             .ok_or_else(|| format!("Glossary not found for type: {}", Self::STRUCT_NAME))?;
-        glossary.insert_from_header(asset, asset_ref, *id)
+
+        glossary.__insert_from_header(asset, asset_ref, *id)?;
+        if let Some(view) = view {
+            registry.script_run.insert_view(view_ref, view);
+        }
+        Ok(())
     }
 }
 
@@ -130,11 +145,11 @@ impl Registry {
         glossary.lookup_item(asset_ref)
     }
 
-    pub fn lookup_asset<A: AssetGroup>(&self, id: u32) -> Option<&A> {
+    pub fn lookup_asset_by_id<A: AssetGroup>(&self, id: u32) -> Option<&A> {
         let Some(glossary) = self.get() else {
             return None;
         };
-        glossary.get(assets::AssetId::<A>::from(id))
+        glossary.lookup_asset_by_id(assets::AssetId::<A>::from(id))
     }
     pub fn lookup_id<A: AssetGroup>(
         &self,
@@ -144,6 +159,12 @@ impl Registry {
             return None;
         };
         glossary.lookup_id(&asset_ref)
+    }
+    pub fn lookup_asset<A: AssetGroup>(&self, asset_ref: AssetRef) -> Option<&A> {
+        let Some(glossary) = self.get() else {
+            return None;
+        };
+        glossary.lookup_asset(&asset_ref)
     }
 
     pub fn lookup_string<A: AssetGroup>(&self, asset_ref_str: String) -> Option<&A> {
@@ -162,6 +183,7 @@ impl Registry {
             .get_mut(&type_id)
             .and_then(|b| b.downcast_mut::<RegistryGlossary<A>>())
     }
+
     pub fn load_script(
         &mut self,
         header: assets::AssetHeader,
@@ -172,18 +194,48 @@ impl Registry {
 
         self.get_mut::<scripts::RhaiScript>()
             .ok_or_else(|| "Script glossary is not registered".to_owned())?
-            .insert_from_header(script, asset_ref, id)?;
+            .__insert_from_header(script, asset_ref, id)?;
         Ok(())
     }
-    pub fn call_by_ref(
+
+    pub fn call_rhai_asset_fn<A: AssetGroup>(
         &mut self,
-        asset_ref: &assets::AssetRef,
+        script: &assets::AssetRef,
+        function: &str,
+        args: Vec<Dynamic>,
+    ) -> Result<&GlossaryItem<A>, String> {
+        let item = self
+            .lookup_item::<RhaiScript>(&script)
+            .ok_or_else(|| format!("Script asset not found {}", script.to_string()))?;
+        let dynamic = self.script_run.call(item, function, args)?;
+        if dynamic.is::<assets::AssetRef>() {
+            let asset_ref = dynamic.cast::<assets::AssetRef>();
+            if let Some(item) = self.lookup_item::<A>(&asset_ref) {
+                Ok(item)
+            } else {
+                Err(format!(
+                    "AssetRef for {} does not represent structure {}",
+                    function,
+                    A::STRUCT_NAME,
+                ))
+            }
+        } else {
+            Err(format!(
+                "{} did not return Asset Ref, did you mean to use call_rhai_fn?",
+                function
+            ))
+        }
+    }
+
+    pub fn call_rhai_fn(
+        &mut self,
+        script: &assets::AssetRef,
         function: &str,
         args: Vec<Dynamic>,
     ) -> Result<rhai::Dynamic, String> {
         let item = self
-            .lookup_item::<RhaiScript>(&asset_ref)
-            .ok_or_else(|| format!("Script asset not found {}", asset_ref.to_string()))?;
+            .lookup_item::<RhaiScript>(&script)
+            .ok_or_else(|| format!("Script asset not found {}", script.to_string()))?;
         let dynamic = self.script_run.call(item, function, args)?;
         Ok(dynamic)
     }
@@ -194,6 +246,15 @@ impl Registry {
 
     pub fn script(&mut self) -> &mut scripts::ScriptRuntime {
         &mut self.script_run
+    }
+    pub fn glossary_items_str<'a, A: AssetGroup>(&self, items: Vec<&GlossaryItem<A>>) -> String {
+        let mut full_str = "".to_string();
+        for item in items {
+            full_str += item.to_string().as_str();
+            full_str += " ";
+        }
+
+        full_str
     }
 }
 
@@ -216,8 +277,8 @@ impl<A: AssetGroup> Default for RegistryGlossary<A> {
 }
 
 impl<A: AssetGroup> RegistryGlossary<A> {
-    /// Inserts an asset using the pre-calculated ID and AssetRef from Pass 1.5
-    pub fn insert_from_header(
+    #[doc(hidden)]
+    pub fn __insert_from_header(
         &mut self,
         asset: A,
         asset_ref: assets::AssetRef,
@@ -225,8 +286,8 @@ impl<A: AssetGroup> RegistryGlossary<A> {
     ) -> Result<(), String> {
         let idx = id_val as usize;
 
-        let id = assets::AssetId::<A>::from(id_val); // Wrap the raw u32 into the strong ID type
-        // Resize storage and reverse tracking vectors if needed
+        let id = assets::AssetId::<A>::from(id_val);
+
         if self.items.len() <= idx {
             self.items.resize_with(idx + 1, || None);
         }
@@ -235,7 +296,7 @@ impl<A: AssetGroup> RegistryGlossary<A> {
             return Err(format!("Duplicate asset ID insertion for: {:?}", asset_ref));
         }
 
-        self.items[idx] = Some(GlossaryItem::<A>::new(asset, asset_ref.clone(), id));
+        self.items[idx] = Some(GlossaryItem::<A>::__new(asset, asset_ref.clone(), id));
         self.id_map.insert(asset_ref.clone(), id);
 
         Ok(())
@@ -244,17 +305,17 @@ impl<A: AssetGroup> RegistryGlossary<A> {
     pub fn get_item(&self, idx: usize) -> Option<&GlossaryItem<A>> {
         self.items.get(idx).and_then(|opt| opt.as_ref())
     }
+    #[doc(hidden)]
+    pub fn __get_mut(&mut self, asset_id: assets::AssetId<A>) -> Option<&mut A> {
+        let idx = asset_id.get() as usize;
+        let item = self.items[idx].as_mut()?;
+        Some(item.__get_mut())
+    }
 
-    pub fn get(&self, asset_id: assets::AssetId<A>) -> Option<&A> {
+    pub fn lookup_asset_by_id(&self, asset_id: assets::AssetId<A>) -> Option<&A> {
         let idx = asset_id.get() as usize;
         let item: &GlossaryItem<A> = self.items[idx].as_ref()?;
         Some(item.get())
-    }
-
-    pub fn get_mut(&mut self, asset_id: assets::AssetId<A>) -> Option<&mut A> {
-        let idx = asset_id.get() as usize;
-        let item = self.items[idx].as_mut()?;
-        Some(item.get_mut())
     }
 
     pub fn lookup_item(&self, asset_ref: &assets::AssetRef) -> Option<&GlossaryItem<A>> {
@@ -270,12 +331,12 @@ impl<A: AssetGroup> RegistryGlossary<A> {
     pub fn lookup_string(&self, asset_ref_str: String) -> Option<&A> {
         let asset_ref = &assets::AssetRef::from(asset_ref_str);
         let id = self.lookup_id(asset_ref)?;
-        self.get(id)
+        self.lookup_asset_by_id(id)
     }
 
     pub fn lookup_asset(&self, asset_ref: &assets::AssetRef) -> Option<&A> {
         let id = self.lookup_id(asset_ref)?;
-        self.get(id)
+        self.lookup_asset_by_id(id)
     }
 
     pub fn resolve(&self, id: u32) -> Option<&assets::AssetRef> {
@@ -296,7 +357,8 @@ pub struct GlossaryItem<A: AssetGroup> {
     _marker: std::marker::PhantomData<A>,
 }
 impl<A: AssetGroup> GlossaryItem<A> {
-    fn new(asset: A, asset_ref: assets::AssetRef, id: assets::AssetId<A>) -> Self {
+    #[doc(hidden)]
+    fn __new(asset: A, asset_ref: assets::AssetRef, id: assets::AssetId<A>) -> Self {
         Self {
             asset,
             id,
@@ -304,8 +366,8 @@ impl<A: AssetGroup> GlossaryItem<A> {
             _marker: std::marker::PhantomData,
         }
     }
-
-    fn get_mut(&mut self) -> &mut A {
+    #[doc(hidden)]
+    fn __get_mut(&mut self) -> &mut A {
         &mut self.asset
     }
 

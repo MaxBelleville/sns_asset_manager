@@ -22,12 +22,15 @@ pub mod __macros {
     pub use crate::declares::{EnumSelectionRaw, TagSelectionRaw};
     pub use crate::inventory;
     pub use crate::registry::{AssetGroup, AssetRegistration};
+    pub use crate::rhai;
     pub use crate::serde;
 }
 
 pub mod prelude {
     pub use crate::assets::{AssetId, AssetRef};
-    pub use crate::declares::{DeclareEnum, DeclareTag, EnumFlags};
+    pub use crate::declares::{
+        DeclareEnum, DeclareEnumView, DeclareTag, DeclareTagView, EnumFlags, EnumSelectionView,
+    };
     pub use crate::process_assets;
     pub use crate::registry::{AssetGroup, GlossaryItem, Registry, initialize_registry};
     pub use crate::rhai::Dynamic;
@@ -440,7 +443,9 @@ fn combine_bundles(
             asset.namespace.clone().unwrap()
         );
     } else {
-        return Err("Both parent and child bundles have no namespace. Did you forget to add namespace to root bundle?".to_string());
+        return Err("Both parent and child bundles have no namespace.
+        Did you forget to add namespace to root bundle?"
+            .to_string());
     }
 
     //Combine version

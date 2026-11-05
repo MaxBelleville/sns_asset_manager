@@ -1,4 +1,5 @@
 use heck::ToUpperCamelCase;
+use rhai::{CustomType, TypeBuilder};
 use semver::Version;
 use serde::{
     Deserialize, Deserializer,
@@ -287,6 +288,18 @@ impl AssetRef {
         }
     }
 }
+
+impl CustomType for AssetRef {
+    fn build(mut builder: TypeBuilder<Self>) {
+        builder
+            .with_name("AssetRef")
+            .with_get("namespace", |asset_ref: &mut Self| {
+                asset_ref.namespace.to_string()
+            })
+            .with_get("name", |asset_ref: &mut Self| asset_ref.name.to_string());
+    }
+}
+
 impl From<String> for AssetRef {
     fn from(s: String) -> Self {
         let mut parts = s.split(':');

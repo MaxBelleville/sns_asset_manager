@@ -9,6 +9,7 @@ pub struct BasicA {
 
 #[derive(Debug, MakeAsset)]
 pub struct BasicB {
+    #[exclude_from_rhai]
     parent: Vec<AssetId<BasicA>>,
     is_loaded: bool,
 }
@@ -18,7 +19,8 @@ pub fn main() {
     let path = Path::new("./examples/assets/basic/");
     println!("current path {}", path.display());
     process_assets(&path, &mut registry, false).map_err(|e| panic!("{}", e));
-    let basic = registry.lookup_asset::<BasicB>(0).unwrap();
+    let basic = registry.lookup_asset_by_id::<BasicB>(0).unwrap();
+
     println!(
         "is_loaded {} parent {}",
         basic.is_loaded,

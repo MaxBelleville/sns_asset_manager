@@ -1,5 +1,6 @@
 use super::registry::{AssetGroup, AssetRegistration, GlossaryItem, Registry};
 use super::{SymbolMap, assets};
+use rhai::{CustomType, Dynamic, Map};
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 
@@ -40,14 +41,47 @@ impl DeclareEnum {
 }
 
 #[doc(hidden)]
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct DeclareEnumRaw {
     items: Vec<String>,
+}
+
+#[derive(Debug, Clone, CustomType)]
+#[rhai_type(name = "DeclareEnum")]
+pub struct DeclareEnumView {
+    #[rhai_type(readonly)]
+    pub items: rhai::Array,
+}
+
+#[derive(Debug, Clone, CustomType)]
+#[rhai_type(name = "EnumFlags")]
+pub struct EnumSelectionView {
+    #[rhai_type(readonly)]
+    pub reference: assets::AssetRef,
+    #[rhai_type(readonly)]
+    pub values: rhai::Array,
+}
+
+impl EnumSelectionView {
+    #[doc(hidden)]
+    pub fn __from_raw(raw: &EnumSelectionRaw) -> Self {
+        Self {
+            reference: raw.reference.clone(),
+            values: raw.values.iter().cloned().map(Dynamic::from).collect(),
+        }
+    }
 }
 
 impl AssetGroup for DeclareEnum {
     const STRUCT_NAME: &'static str = "DeclareEnum";
     type Raw = DeclareEnumRaw;
+    type View = DeclareEnumView;
+
+    fn view_from_raw(raw: &Self::Raw, _registry: &Registry) -> Result<Option<Dynamic>, String> {
+        Ok(Some(Dynamic::from(DeclareEnumView {
+            items: raw.items.iter().cloned().map(Dynamic::from).collect(),
+        })))
+    }
 
     fn from_raw(
         raw: Self::Raw,
@@ -117,21 +151,21 @@ impl EnumFlags {
 
     pub fn to_list(&self, registry: &Registry) -> Vec<String> {
         let declaration = registry
-            .lookup_asset::<DeclareEnum>(self.declaration.get())
+            .lookup_asset_by_id::<DeclareEnum>(self.declaration.get())
             .unwrap();
         declaration.mask_items(self.bits())
     }
 
     pub fn contains(&self, registry: &Registry, item: &str) -> bool {
         let declaration = registry
-            .lookup_asset::<DeclareEnum>(self.declaration.get())
+            .lookup_asset_by_id::<DeclareEnum>(self.declaration.get())
             .unwrap();
         declaration.contains(self.bits, item)
     }
 }
 
 #[doc(hidden)]
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct EnumSelectionRaw {
     #[serde(rename = "ref")]
     reference: assets::AssetRef,
@@ -140,7 +174,7 @@ pub struct EnumSelectionRaw {
 
 /// Raw form of `Tag("namespace:name")` in a static asset field.
 #[doc(hidden)]
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct TagSelectionRaw(pub assets::AssetRef);
 
 /// A tag declaration groups asset references for consumers to query.
@@ -167,14 +201,51 @@ impl DeclareTag {
 }
 
 #[doc(hidden)]
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct DeclareTagRaw {
     items: HashMap<String, Vec<assets::AssetRef>>,
+}
+
+#[derive(Debug, Clone, CustomType)]
+#[rhai_type(name = "DeclareTag")]
+pub struct DeclareTagView {
+    #[rhai_type(readonly)]
+    pub items: Map,
+}
+
+impl DeclareTagView {
+    fn from_items(items: &HashMap<String, Vec<assets::AssetRef>>) -> Self {
+        let items = items
+            .iter()
+            .map(|(asset_type, refs)| {
+                let refs = refs
+                    .iter()
+                    .cloned()
+                    .map(Dynamic::from)
+                    .collect::<rhai::Array>();
+                (asset_type.clone().into(), Dynamic::from(refs))
+            })
+            .collect();
+        Self { items }
+    }
+
+    #[doc(hidden)]
+    pub fn __resolve(raw: &TagSelectionRaw, registry: &Registry) -> Result<Self, String> {
+        let item = registry
+            .lookup_item::<DeclareTag>(&raw.0)
+            .ok_or_else(|| format!("Missing Declare(Tag) asset {}", raw.0))?;
+        Ok(Self::from_items(&item.get().items))
+    }
 }
 
 impl AssetGroup for DeclareTag {
     const STRUCT_NAME: &'static str = "DeclareTag";
     type Raw = DeclareTagRaw;
+    type View = DeclareTagView;
+
+    fn view_from_raw(raw: &Self::Raw, _registry: &Registry) -> Result<Option<Dynamic>, String> {
+        Ok(Some(Dynamic::from(DeclareTagView::from_items(&raw.items))))
+    }
 
     fn from_raw(
         raw: Self::Raw,
@@ -224,6 +295,8 @@ inventory::submit! {
     AssetRegistration {
         register_fn: |registry| {
             registry.__register::<DeclareEnum>();
+            registry.script_engine().build_type::<DeclareEnumView>();
+            registry.script_engine().build_type::<EnumSelectionView>();
         }
     }
 }
@@ -232,6 +305,7 @@ inventory::submit! {
     AssetRegistration {
         register_fn: |registry| {
             registry.__register::<DeclareTag>();
+            registry.script_engine().build_type::<DeclareTagView>();
         }
     }
 }

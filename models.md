@@ -10,18 +10,19 @@
 - **Asset reference (`AssetRef`)**: A namespaced name such as `core:flags`. Static assets and declarations get their namespace from the containing bundle and their name from `asset_name` or the source filename.
 - **Static asset**: User data with `asset_type: Static` and a `struct_name`. The name selects a `MakeAsset`-derived Rust type registered in the `Registry`; the `data` value is deserialized into that type's generated raw form and converted into the final struct.
 - **Declaration**: A registered asset type. `Declare(Enum)` defines an ordered list of names and `Declare(Tag)` groups references by registered `STRUCT_NAME`. A static field of type `EnumFlags` can use `Enum(ref: "core:flags", values: ["enable_b"])`; the derive macro resolves it into a typed selection containing the enum declaration ID and a bit mask. A field of type `AssetId<DeclareTag>` can use `Tag("core:some-tag")`; calling `tag.items::<MyAsset>(&registry)` returns matching typed glossary items directly. Enum list position determines the bit index (the first item is bit 0); masks support up to 32 declared items.
-- **Rhai script**: `.rhai` files are discovered, compiled after declarations and static assets load, and stored as typed `Script` entries in the registry. `ScriptRuntime` owns the Rhai engine and compiled programs; Rust invokes a named function by script reference or ID with `Dynamic` arguments.
+- **Rhai view**: `MakeAsset` generates an immutable view from decoded RON raw values. Fields are included by default; `#[exclude_from_rhai]` hides a field, and the same struct attribute omits the entire view. Views are indexed by `AssetRef` and retrieved in scripts with `lookup_asset(AssetRef::from("namespace:name"))`.
+- **Rhai script**: `.rhai` files are discovered and compiled after declarations and static assets load. Scripts can import other scripts by asset reference (for example, `import "core:helpers" as helpers;`). The registry-owned runtime supports Rust callbacks and named function calls.
 - **Asset bundle node**: The returned `AssetBundleNode` tree exposes discovered bundle metadata and child bundles.
 
 ## Loading flow
 
-1. The application creates a `ScriptRuntime`, optionally registers Rhai host functions, then calls `process_assets(root, &mut registry, &mut scripts, use_current_dir)`.
+1. The application calls `process_assets(root, &mut registry, use_current_dir)`; the registry owns the script runtime. Register host functions through `registry.script_engine()` before loading.
 2. The library creates a virtual filesystem for a directory or ZIP, walks bundles/includes, and gathers RON and Rhai headers.
 3. Asset references are sorted and assigned per-struct numeric IDs; headers are grouped into declarations, static assets, and scripts.
 4. Declaration headers are passed through their registered asset processors before static assets load. Enum declarations validate ordered names; tag declarations validate that every member exists, is unique, and appears under its actual registered type name.
-5. Each static header is passed to the processor registered for its `struct_name`. The shared loader deserializes its raw data; `MakeAsset` generated conversion resolves `AssetId<T>` and `EnumFlags` fields, then inserts the result into the registry glossary.
-6. Rhai sources compile through the configured runtime engine and are registered in the `Script` glossary. A syntax error is returned with the script reference.
-7. Rust selects a script through the registry and invokes a named function on `ScriptRuntime`; calls return a Rhai `Dynamic` value or a contextual error.
+5. Each asset loader deserializes a raw value. It projects any Rhai view from that raw value, converts the value into its registered Rust type, inserts the asset, and attaches its view under the same `AssetRef`.
+6. Enum selection views retain the declaration reference and selected names. Tag reference views expand the declaration into a map of asset type names to member references.
+7. Rhai sources compile through the configured runtime; the module resolver loads imported scripts from their registered asset references. `lookup_asset` returns Rhai unit when an asset is missing or excluded.
 
 ## Main code areas
 
@@ -35,7 +36,7 @@
 
 ## Defining Rust asset types
 
-Derive `MakeAsset` for a named-field struct and register it with the inventory mechanism by linking the crate normally. The derived processor uses the struct name in UpperCamelCase by default, or `#[struct_name("...")]` to choose the matching RON `struct_name` explicitly. A field of type `AssetId<T>` is read from RON as an `AssetRef` string and resolved to the referenced asset's typed ID. For `AssetId<DeclareTag>`, use `Tag("namespace:tag")`; `Option<AssetId<DeclareTag>>` and `Vec<AssetId<DeclareTag>>` are also supported. Use `EnumFlags` for RON `Enum(ref: ..., values: [...])` selections; it exposes the declaration ID and selected bits, and can check a named item against its `DeclareEnum` definition. Other fields deserialize directly.
+Derive `MakeAsset` for a named-field struct and register it with inventory by linking the crate normally. The derived processor uses the struct name in UpperCamelCase by default, or `#[struct_name("...")]` to choose the matching RON `struct_name`. Fields appear in the Rhai view by default; mark an unsupported or private field with `#[exclude_from_rhai]`. Apply that attribute to the struct to omit its view. Exposed fields must be cloneable, thread-safe, and representable in Rhai. `Vec` fields become Rhai arrays. `AssetId<T>` fields use `AssetRef` references; `Tag("namespace:tag")` fields expose the referenced tag's grouped members, while `Enum(ref: ..., values: [...])` fields expose the declaration reference and selected values.
 
 ## Input examples
 
