@@ -21,7 +21,7 @@ pub struct AssetRegistration {
 }
 
 inventory::collect!(AssetRegistration);
-pub trait AssetGroup: Sized + 'static {
+pub trait AssetGroup: Sized + Send + Sync + 'static {
     const STRUCT_NAME: &'static str;
     type Raw: DeserializeOwned;
     type View: Clone + Send + Sync;
@@ -83,7 +83,7 @@ pub fn initialize_registry() -> Registry {
 
 #[derive(Default)]
 pub struct Registry {
-    struct_map: HashMap<TypeId, Box<dyn Any>>,
+    struct_map: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
     name_map: HashMap<String, TypeId>,
     loaders: HashMap<String, AssetLoaderFn>,
     script_run: scripts::ScriptRuntime,
