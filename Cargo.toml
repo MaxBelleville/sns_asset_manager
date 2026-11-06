@@ -8,7 +8,8 @@ edition = "2024"
 resolver = "2"
 members = ["macros"]
 
-
+[features]
+bevy=["bevy_ecs"]
 
 [workspace.dependencies]
 inventory = "0.3.25"
@@ -26,6 +27,7 @@ semver = {version="1.0.28",features=["serde"]}
 macros = { path = "macros" }
 inventory = {workspace = true}
 heck = {workspace = true}
+bevy_ecs = {optional=true,version="0.20"}
 
 zip = "9.0.5"
 

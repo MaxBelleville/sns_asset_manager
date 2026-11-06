@@ -12,10 +12,45 @@ mod declares;
 mod registry;
 mod scripts;
 
+#[doc(hidden)]
 pub use inventory;
+#[doc(hidden)]
 pub use rhai;
+#[doc(hidden)]
 pub use ron;
+#[doc(hidden)]
 pub use serde;
+
+#[cfg(feature = "bevy")]
+use bevy_ecs::prelude::*;
+#[cfg(feature = "bevy")]
+#[derive(Resource)]
+pub struct RegistryResource {
+    registry: registry::Registry,
+}
+#[cfg(feature = "bevy")]
+impl Default for RegistryResource {
+    fn default() -> Self {
+        Self {
+            registry: registry::initialize_registry(),
+        }
+    }
+}
+#[cfg(feature = "bevy")]
+impl RegistryResource {
+    pub fn process_assets(
+        &mut self,
+        paths: Vec<String>,
+        use_current_dir: bool,
+    ) -> Result<Vec<assets::AssetBundleNode>, String> {
+        let mut bundle_trees = Vec::new();
+        for path in paths {
+            let path = Path::new(&path);
+            bundle_trees.push(process_assets(&path, &mut self.registry, use_current_dir)?);
+        }
+        Ok(bundle_trees)
+    }
+}
 
 #[doc(hidden)]
 pub mod __macros {
@@ -31,8 +66,11 @@ pub mod prelude {
     pub use crate::declares::{
         DeclareEnum, DeclareEnumView, DeclareTag, DeclareTagView, EnumFlags, EnumSelectionView,
     };
+    #[cfg(not(feature = "bevy"))]
     pub use crate::process_assets;
-    pub use crate::registry::{AssetGroup, GlossaryItem, Registry, initialize_registry};
+    #[cfg(not(feature = "bevy"))]
+    pub use crate::registry::initialize_registry;
+    pub use crate::registry::{AssetGroup, GlossaryItem, Registry};
     pub use crate::rhai::Dynamic;
     pub use crate::scripts::{RhaiScript, ScriptRuntime};
     pub use macros::MakeAsset;
