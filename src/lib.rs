@@ -66,6 +66,8 @@ pub mod prelude {
     pub use crate::declares::{
         DeclareEnum, DeclareEnumView, DeclareTag, DeclareTagView, EnumFlags, EnumSelectionView,
     };
+    #[cfg(feature = "bevy")]
+    pub use crate::RegistryResource;
     #[cfg(not(feature = "bevy"))]
     pub use crate::process_assets;
     #[cfg(not(feature = "bevy"))]
