@@ -1,5 +1,4 @@
-use super::registry::{AssetGroup, AssetRegistration, GlossaryItem, Registry};
-use super::{SymbolMap, assets};
+use super::{SymbolMap, assets, registry};
 use rhai::{CustomType, Dynamic, Map};
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
@@ -72,12 +71,15 @@ impl EnumSelectionView {
     }
 }
 
-impl AssetGroup for DeclareEnum {
+impl assets::AssetGroup for DeclareEnum {
     const STRUCT_NAME: &'static str = "DeclareEnum";
     type Raw = DeclareEnumRaw;
     type View = DeclareEnumView;
 
-    fn view_from_raw(raw: &Self::Raw, _registry: &Registry) -> Result<Option<Dynamic>, String> {
+    fn view_from_raw(
+        raw: &Self::Raw,
+        _registry: &registry::Registry,
+    ) -> Result<Option<Dynamic>, String> {
         Ok(Some(Dynamic::from(DeclareEnumView {
             items: raw.items.iter().cloned().map(Dynamic::from).collect(),
         })))
@@ -85,7 +87,7 @@ impl AssetGroup for DeclareEnum {
 
     fn from_raw(
         raw: Self::Raw,
-        _registry: &mut Registry,
+        _registry: &mut registry::Registry,
         _symbols: &SymbolMap,
     ) -> Result<Self, String> {
         if raw.items.len() > 32 {
@@ -113,7 +115,7 @@ pub struct EnumFlags {
 
 impl EnumFlags {
     #[doc(hidden)]
-    pub fn __resolve(raw: EnumSelectionRaw, registry: &Registry) -> Result<Self, String> {
+    pub fn __resolve(raw: EnumSelectionRaw, registry: &registry::Registry) -> Result<Self, String> {
         let reference = raw.reference;
         let values = raw.values;
 
@@ -149,14 +151,14 @@ impl EnumFlags {
         self.bits
     }
 
-    pub fn to_list(&self, registry: &Registry) -> Vec<String> {
+    pub fn to_list(&self, registry: &registry::Registry) -> Vec<String> {
         let declaration = registry
             .lookup_asset_by_id::<DeclareEnum>(self.declaration.get())
             .unwrap();
         declaration.mask_items(self.bits())
     }
 
-    pub fn contains(&self, registry: &Registry, item: &str) -> bool {
+    pub fn contains(&self, registry: &registry::Registry, item: &str) -> bool {
         let declaration = registry
             .lookup_asset_by_id::<DeclareEnum>(self.declaration.get())
             .unwrap();
@@ -230,7 +232,7 @@ impl DeclareTagView {
     }
 
     #[doc(hidden)]
-    pub fn __resolve(raw: &TagSelectionRaw, registry: &Registry) -> Result<Self, String> {
+    pub fn __resolve(raw: &TagSelectionRaw, registry: &registry::Registry) -> Result<Self, String> {
         let item = registry
             .lookup_item::<DeclareTag>(&raw.0)
             .ok_or_else(|| format!("Missing Declare(Tag) asset {}", raw.0))?;
@@ -238,18 +240,21 @@ impl DeclareTagView {
     }
 }
 
-impl AssetGroup for DeclareTag {
+impl assets::AssetGroup for DeclareTag {
     const STRUCT_NAME: &'static str = "DeclareTag";
     type Raw = DeclareTagRaw;
     type View = DeclareTagView;
 
-    fn view_from_raw(raw: &Self::Raw, _registry: &Registry) -> Result<Option<Dynamic>, String> {
+    fn view_from_raw(
+        raw: &Self::Raw,
+        _registry: &registry::Registry,
+    ) -> Result<Option<Dynamic>, String> {
         Ok(Some(Dynamic::from(DeclareTagView::from_items(&raw.items))))
     }
 
     fn from_raw(
         raw: Self::Raw,
-        _registry: &mut Registry,
+        _registry: &mut registry::Registry,
         symbols: &SymbolMap,
     ) -> Result<Self, String> {
         let mut members = HashSet::new();
@@ -267,10 +272,10 @@ impl AssetGroup for DeclareTag {
 
 impl assets::AssetId<DeclareTag> {
     /// Resolves the members of this tag as typed glossary items.
-    pub fn items<'a, A: AssetGroup>(
+    pub fn items<'a, A: assets::AssetGroup>(
         &self,
-        registry: &'a Registry,
-    ) -> Result<Vec<&'a GlossaryItem<A>>, String> {
+        registry: &'a registry::Registry,
+    ) -> Result<Vec<&'a registry::GlossaryItem<A>>, String> {
         let tag = registry
             .get_item::<DeclareTag>(self.get() as usize)
             .ok_or_else(|| format!("Declare(Tag) ID {} is not loaded", self.get()))?;
@@ -292,7 +297,7 @@ impl assets::AssetId<DeclareTag> {
 }
 
 inventory::submit! {
-    AssetRegistration {
+    registry::AssetRegistration {
         register_fn: |registry| {
             registry.__register::<DeclareEnum>();
             registry.script_engine().build_type::<DeclareEnumView>();
@@ -302,7 +307,7 @@ inventory::submit! {
 }
 
 inventory::submit! {
-    AssetRegistration {
+    registry::AssetRegistration {
         register_fn: |registry| {
             registry.__register::<DeclareTag>();
             registry.script_engine().build_type::<DeclareTagView>();

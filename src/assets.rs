@@ -1,10 +1,11 @@
+use super::{SymbolMap, registry};
 use heck::ToUpperCamelCase;
-use rhai::{CustomType, TypeBuilder};
+use rhai::{CustomType, Dynamic, TypeBuilder};
 use semver::Version;
 use serde::{
     Deserialize, Deserializer,
     de::{
-        MapAccess, SeqAccess, Visitor,
+        DeserializeOwned, MapAccess, SeqAccess, Visitor,
         value::{MapAccessDeserializer, SeqAccessDeserializer},
     },
 };
@@ -92,9 +93,13 @@ impl<'de> Deserialize<'de> for RawAssetSource {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct RawAssetHeader {
+    #[serde(default)]
     pub(super) asset_name: Option<String>,
     pub(super) asset_type: AssetType,
+    #[serde(default)]
     pub(super) struct_name: Option<String>,
+    #[serde(default)]
+    pub(super) collection_name: Option<String>,
     pub(super) data: ron::Value,
 }
 
@@ -104,6 +109,7 @@ pub struct AssetHeader {
     pub(crate) asset_ref: AssetRef,
     pub(crate) asset_type: AssetType,
     pub(crate) struct_name: Option<String>,
+    pub(crate) collection_name: Option<String>,
     pub(crate) data: Option<ron::Value>,
 }
 
@@ -144,6 +150,7 @@ impl AssetHeader {
             asset_ref: AssetRef::new(namespace, name),
             asset_type: raw.asset_type,
             struct_name: Some(struct_name),
+            collection_name: raw.collection_name,
             data: Some(raw.data),
         })
     }
@@ -153,6 +160,7 @@ impl AssetHeader {
             asset_ref: AssetRef::new(namespace, path_name),
             asset_type: AssetType::Script,
             struct_name: Some("RhaiScript".to_owned()),
+            collection_name: None,
             data: None,
         }
     }
@@ -160,13 +168,17 @@ impl AssetHeader {
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct AssetBundle {
+    #[serde(default)]
     pub(crate) namespace: Option<String>,
     #[serde(skip)]
     pub(crate) full_namespace: String,
+    #[serde(default)]
     pub(crate) version: Option<Version>,
+    #[serde(default)]
     pub(crate) min_supported: Option<Version>,
     #[serde(default)]
     pub(crate) includes: Vec<String>,
+    #[serde(default)]
     pub settings: Option<ron::Value>,
 }
 impl AssetBundle {
@@ -237,6 +249,61 @@ pub struct ProcessedAssets {
     pub(crate) declares: HashMap<String, Vec<AssetHeader>>,
     pub(crate) statics: HashMap<String, Vec<AssetHeader>>,
     pub(crate) scripts: Vec<AssetHeader>,
+}
+
+pub trait AssetGroup: Sized + Send + Sync + 'static {
+    const STRUCT_NAME: &'static str;
+    type Raw: DeserializeOwned;
+    type View: Clone + Send + Sync;
+
+    fn view_from_raw(
+        _raw: &Self::Raw,
+        _registry: &registry::Registry,
+    ) -> Result<Option<Dynamic>, String> {
+        Ok(None)
+    }
+
+    fn from_raw(
+        raw: Self::Raw,
+        registry: &mut registry::Registry,
+        symbols: &SymbolMap,
+    ) -> Result<Self, String>;
+
+    fn load_ron_asset(
+        registry: &mut registry::Registry,
+        asset_ref: AssetRef,
+        collection_name: Option<String>,
+        symbols: &SymbolMap,
+        data: ron::Value,
+    ) -> Result<(), String> {
+        let asset_ref_string = asset_ref.to_string();
+        let raw: Self::Raw = data
+            .into_rust()
+            .map_err(|error| format!("{} - {}: {}", Self::STRUCT_NAME, asset_ref_string, error))?;
+
+        let id = symbols.get(&asset_ref_string).ok_or_else(|| {
+            format!(
+                "No assigned asset ID for {} ({})",
+                Self::STRUCT_NAME,
+                asset_ref_string
+            )
+        })?;
+
+        let view = Self::view_from_raw(&raw, registry)?;
+
+        let asset = Self::from_raw(raw, registry, symbols)?;
+        let view_ref = asset_ref.clone();
+
+        let glossary = registry
+            .__get_mut::<Self>()
+            .ok_or_else(|| format!("Glossary not found for type: {}", Self::STRUCT_NAME))?;
+
+        glossary.__insert_from_header(asset, asset_ref, *id, collection_name)?;
+        if let Some(view) = view {
+            registry.script().insert_view(view_ref, view);
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Default)]

@@ -1,74 +1,104 @@
 use rhai::{Dynamic, Engine};
-use serde::de::DeserializeOwned;
+
 use std::fmt::Display;
+
 use std::{
     any::{Any, TypeId},
     collections::HashMap,
 };
 
-use crate::assets::AssetRef;
-use crate::scripts::RhaiScript;
+use super::{SymbolMap, assets, scripts};
 
-use super::scripts;
-
-use super::{SymbolMap, assets};
-
-pub type AssetLoaderFn =
-    fn(&mut Registry, assets::AssetRef, &SymbolMap, ron::Value) -> Result<(), String>;
+pub type AssetLoaderFn = fn(
+    &mut Registry,
+    assets::AssetRef,
+    Option<String>,
+    &SymbolMap,
+    ron::Value,
+) -> Result<(), String>;
 
 pub struct AssetRegistration {
     pub register_fn: fn(&mut Registry),
 }
 
 inventory::collect!(AssetRegistration);
-pub trait AssetGroup: Sized + Send + Sync + 'static {
-    const STRUCT_NAME: &'static str;
-    type Raw: DeserializeOwned;
-    type View: Clone + Send + Sync;
 
-    fn view_from_raw(_raw: &Self::Raw, _registry: &Registry) -> Result<Option<Dynamic>, String> {
-        Ok(None)
+#[cfg(feature = "bevy")]
+use super::process_assets;
+#[cfg(feature = "bevy")]
+use bevy_ecs::prelude::*;
+#[cfg(feature = "bevy")]
+use std::path::Path;
+
+#[cfg(feature = "bevy")]
+#[derive(Resource)]
+pub struct RegistryResource {
+    registry: Registry,
+}
+#[cfg(feature = "bevy")]
+impl Default for RegistryResource {
+    fn default() -> Self {
+        Self {
+            registry: initialize_registry(),
+        }
+    }
+}
+#[cfg(feature = "bevy")]
+impl RegistryResource {
+    pub fn process_assets(
+        &mut self,
+        paths: Vec<String>,
+        use_current_dir: bool,
+    ) -> Result<Vec<assets::AssetBundleNode>, String> {
+        let mut bundle_trees = Vec::new();
+        for path in paths {
+            let path = Path::new(&path);
+            bundle_trees.push(process_assets(&path, &mut self.registry, use_current_dir)?);
+        }
+        Ok(bundle_trees)
+    }
+    pub fn get_all<A: assets::AssetGroup>(&self) -> Vec<&A> {
+        self.registry.get_all::<A>()
+    }
+    pub fn get_all_filtered<A: assets::AssetGroup>(
+        &self,
+        namespace: Option<&str>,
+        collection: Option<&str>,
+    ) -> Vec<&A> {
+        self.registry.get_all_filtered::<A>(namespace, collection)
     }
 
-    fn from_raw(
-        raw: Self::Raw,
-        registry: &mut Registry,
-        symbols: &SymbolMap,
-    ) -> Result<Self, String>;
+    pub fn lookup_asset_by_id<A: assets::AssetGroup>(&self, id: u32) -> Option<&A> {
+        self.registry.lookup_asset_by_id::<A>(id)
+    }
 
-    fn load_ron_asset(
-        registry: &mut Registry,
-        asset_ref: assets::AssetRef,
-        symbols: &SymbolMap,
-        data: ron::Value,
-    ) -> Result<(), String> {
-        let asset_ref_string = asset_ref.to_string();
-        let raw: Self::Raw = data
-            .into_rust()
-            .map_err(|error| format!("{} - {}: {}", Self::STRUCT_NAME, asset_ref_string, error))?;
+    pub fn lookup_asset<A: assets::AssetGroup>(&self, asset_ref: assets::AssetRef) -> Option<&A> {
+        self.registry.lookup_asset::<A>(asset_ref)
+    }
 
-        let id = symbols.get(&asset_ref_string).ok_or_else(|| {
-            format!(
-                "No assigned asset ID for {} ({})",
-                Self::STRUCT_NAME,
-                asset_ref_string
-            )
-        })?;
+    pub fn registry(&self) -> &Registry {
+        &self.registry
+    }
 
-        let view = Self::view_from_raw(&raw, registry)?;
+    pub fn registry_mut(&mut self) -> &mut Registry {
+        &mut self.registry
+    }
 
-        let asset = Self::from_raw(raw, registry, symbols)?;
-        let view_ref = asset_ref.clone();
+    pub fn script(&mut self) -> &mut scripts::ScriptRuntime {
+        self.registry.script()
+    }
 
-        let glossary = registry
-            .get_mut::<Self>()
-            .ok_or_else(|| format!("Glossary not found for type: {}", Self::STRUCT_NAME))?;
+    pub fn script_engine(&mut self) -> &mut Engine {
+        self.registry.script_engine()
+    }
 
-        glossary.__insert_from_header(asset, asset_ref, *id)?;
-        if let Some(view) = view {
-            registry.script_run.insert_view(view_ref, view);
-        }
-        Ok(())
+    pub fn call_rhai_fn(
+        &mut self,
+        script: &assets::AssetRef,
+        function: &str,
+        args: Vec<Dynamic>,
+    ) -> Result<rhai::Dynamic, String> {
+        self.registry.call_rhai_fn(script, function, args)
     }
 }
 
@@ -90,7 +120,7 @@ pub struct Registry {
 }
 
 impl Registry {
-    pub fn resolve_asset_ref<A: AssetGroup>(
+    pub fn resolve_asset_ref<A: assets::AssetGroup>(
         &self,
         asset_ref: &assets::AssetRef,
         symbols: &SymbolMap,
@@ -108,7 +138,7 @@ impl Registry {
         assets::AssetId::<A>::from(raw_id)
     }
     #[doc(hidden)]
-    pub fn __register<A: AssetGroup>(&mut self) {
+    pub fn __register<A: assets::AssetGroup>(&mut self) {
         let type_id = TypeId::of::<A>();
 
         if self.name_map.contains_key(&A::STRUCT_NAME.to_string()) {
@@ -122,20 +152,60 @@ impl Registry {
         self.loaders.insert(A::STRUCT_NAME.to_string(), loader);
     }
 
-    pub fn get<A: AssetGroup>(&self) -> Option<&RegistryGlossary<A>> {
+    pub fn get<A: assets::AssetGroup>(&self) -> Option<&RegistryGlossary<A>> {
         let type_id = TypeId::of::<A>();
         self.struct_map
             .get(&type_id)
             .and_then(|b| b.downcast_ref::<RegistryGlossary<A>>())
     }
-    pub fn get_item<A: AssetGroup>(&self, idx: usize) -> Option<&GlossaryItem<A>> {
+    /// Returns every loaded asset of type `A` in asset ID order.
+    pub fn get_all<A: assets::AssetGroup>(&self) -> Vec<&A> {
+        self.get()
+            .map(RegistryGlossary::get_all)
+            .unwrap_or_default()
+    }
+    /// Returns every loaded glossary item of type `A` in asset ID order.
+    pub fn get_all_items<A: assets::AssetGroup>(&self) -> Vec<&GlossaryItem<A>> {
+        self.get()
+            .map(RegistryGlossary::get_all_items)
+            .unwrap_or_default()
+    }
+    /// Returns assets matching the optional exact namespace/collection filters.
+    /// A namespace ending in `.*` matches descendant namespaces, excluding the
+    /// namespace before the wildcard.
+    pub fn get_all_filtered<A: assets::AssetGroup>(
+        &self,
+        namespace: Option<&str>,
+        collection: Option<&str>,
+    ) -> Vec<&A> {
+        self.get_all_items_filtered(namespace, collection)
+            .into_iter()
+            .map(GlossaryItem::get)
+            .collect()
+    }
+    /// Returns glossary items matching the optional exact namespace/collection filters.
+    pub fn get_all_items_filtered<A: assets::AssetGroup>(
+        &self,
+        namespace: Option<&str>,
+        collection: Option<&str>,
+    ) -> Vec<&GlossaryItem<A>> {
+        self.get_all_items::<A>()
+            .into_iter()
+            .filter(|item| {
+                let namespace_matches = item.filter_ns(namespace);
+                namespace_matches
+                    && collection.is_none_or(|filter| item.collection_name() == Some(filter))
+            })
+            .collect()
+    }
+    pub fn get_item<A: assets::AssetGroup>(&self, idx: usize) -> Option<&GlossaryItem<A>> {
         let Some(glossary) = self.get() else {
             return None;
         };
         glossary.get_item(idx)
     }
 
-    pub fn lookup_item<A: AssetGroup>(
+    pub fn lookup_item<A: assets::AssetGroup>(
         &self,
         asset_ref: &assets::AssetRef,
     ) -> Option<&GlossaryItem<A>> {
@@ -145,13 +215,13 @@ impl Registry {
         glossary.lookup_item(asset_ref)
     }
 
-    pub fn lookup_asset_by_id<A: AssetGroup>(&self, id: u32) -> Option<&A> {
+    pub fn lookup_asset_by_id<A: assets::AssetGroup>(&self, id: u32) -> Option<&A> {
         let Some(glossary) = self.get() else {
             return None;
         };
         glossary.lookup_asset_by_id(assets::AssetId::<A>::from(id))
     }
-    pub fn lookup_id<A: AssetGroup>(
+    pub fn lookup_id<A: assets::AssetGroup>(
         &self,
         asset_ref: assets::AssetRef,
     ) -> Option<assets::AssetId<A>> {
@@ -160,14 +230,14 @@ impl Registry {
         };
         glossary.lookup_id(&asset_ref)
     }
-    pub fn lookup_asset<A: AssetGroup>(&self, asset_ref: AssetRef) -> Option<&A> {
+    pub fn lookup_asset<A: assets::AssetGroup>(&self, asset_ref: assets::AssetRef) -> Option<&A> {
         let Some(glossary) = self.get() else {
             return None;
         };
         glossary.lookup_asset(&asset_ref)
     }
 
-    pub fn lookup_string<A: AssetGroup>(&self, asset_ref_str: String) -> Option<&A> {
+    pub fn lookup_string<A: assets::AssetGroup>(&self, asset_ref_str: String) -> Option<&A> {
         let Some(glossary) = self.get() else {
             return None;
         };
@@ -177,35 +247,37 @@ impl Registry {
     pub fn get_loader(&self, struct_name: &str) -> Option<&AssetLoaderFn> {
         self.loaders.get(struct_name)
     }
-    pub fn get_mut<A: AssetGroup>(&mut self) -> Option<&mut RegistryGlossary<A>> {
+    #[doc(hidden)]
+    pub fn __get_mut<A: assets::AssetGroup>(&mut self) -> Option<&mut RegistryGlossary<A>> {
         let type_id = TypeId::of::<A>();
         self.struct_map
             .get_mut(&type_id)
             .and_then(|b| b.downcast_mut::<RegistryGlossary<A>>())
     }
-
-    pub fn load_script(
+    #[doc(hidden)]
+    pub fn __load_script(
         &mut self,
         header: assets::AssetHeader,
         symbols: &SymbolMap,
     ) -> Result<(), String> {
         let asset_ref = header.asset_ref.clone();
+        let collection_name = header.collection_name.clone();
         let (script, id) = self.script_run.load_script(header, symbols)?;
 
-        self.get_mut::<scripts::RhaiScript>()
+        self.__get_mut::<scripts::RhaiScript>()
             .ok_or_else(|| "Script glossary is not registered".to_owned())?
-            .__insert_from_header(script, asset_ref, id)?;
+            .__insert_from_header(script, asset_ref, id, collection_name)?;
         Ok(())
     }
 
-    pub fn call_rhai_asset_fn<A: AssetGroup>(
+    pub fn call_rhai_asset_fn<A: assets::AssetGroup>(
         &mut self,
         script: &assets::AssetRef,
         function: &str,
         args: Vec<Dynamic>,
     ) -> Result<&GlossaryItem<A>, String> {
         let item = self
-            .lookup_item::<RhaiScript>(&script)
+            .lookup_item::<scripts::RhaiScript>(&script)
             .ok_or_else(|| format!("Script asset not found {}", script.to_string()))?;
         let dynamic = self.script_run.call(item, function, args)?;
         if dynamic.is::<assets::AssetRef>() {
@@ -234,7 +306,7 @@ impl Registry {
         args: Vec<Dynamic>,
     ) -> Result<rhai::Dynamic, String> {
         let item = self
-            .lookup_item::<RhaiScript>(&script)
+            .lookup_item::<scripts::RhaiScript>(&script)
             .ok_or_else(|| format!("Script asset not found {}", script.to_string()))?;
         let dynamic = self.script_run.call(item, function, args)?;
         Ok(dynamic)
@@ -247,7 +319,10 @@ impl Registry {
     pub fn script(&mut self) -> &mut scripts::ScriptRuntime {
         &mut self.script_run
     }
-    pub fn glossary_items_str<'a, A: AssetGroup>(&self, items: Vec<&GlossaryItem<A>>) -> String {
+    pub fn glossary_items_str<'a, A: assets::AssetGroup>(
+        &self,
+        items: Vec<&GlossaryItem<A>>,
+    ) -> String {
         let mut full_str = "".to_string();
         for item in items {
             full_str += item.to_string().as_str();
@@ -260,13 +335,13 @@ impl Registry {
 
 /// Combines storage and glossary for a single concrete asset type.
 #[derive(Debug)]
-pub struct RegistryGlossary<A: AssetGroup> {
+pub struct RegistryGlossary<A: assets::AssetGroup> {
     items: Vec<Option<GlossaryItem<A>>>,
     id_map: HashMap<assets::AssetRef, assets::AssetId<A>>,
     _marker: std::marker::PhantomData<A>,
 }
 
-impl<A: AssetGroup> Default for RegistryGlossary<A> {
+impl<A: assets::AssetGroup> Default for RegistryGlossary<A> {
     fn default() -> Self {
         Self {
             items: Vec::new(),
@@ -276,13 +351,14 @@ impl<A: AssetGroup> Default for RegistryGlossary<A> {
     }
 }
 
-impl<A: AssetGroup> RegistryGlossary<A> {
+impl<A: assets::AssetGroup> RegistryGlossary<A> {
     #[doc(hidden)]
     pub fn __insert_from_header(
         &mut self,
         asset: A,
         asset_ref: assets::AssetRef,
         id_val: u32,
+        collection_name: Option<String>,
     ) -> Result<(), String> {
         let idx = id_val as usize;
 
@@ -296,7 +372,12 @@ impl<A: AssetGroup> RegistryGlossary<A> {
             return Err(format!("Duplicate asset ID insertion for: {:?}", asset_ref));
         }
 
-        self.items[idx] = Some(GlossaryItem::<A>::__new(asset, asset_ref.clone(), id));
+        self.items[idx] = Some(GlossaryItem::<A>::__new(
+            asset,
+            asset_ref.clone(),
+            id,
+            collection_name,
+        ));
         self.id_map.insert(asset_ref.clone(), id);
 
         Ok(())
@@ -305,6 +386,17 @@ impl<A: AssetGroup> RegistryGlossary<A> {
     pub fn get_item(&self, idx: usize) -> Option<&GlossaryItem<A>> {
         self.items.get(idx).and_then(|opt| opt.as_ref())
     }
+
+    pub fn get_all(&self) -> Vec<&A> {
+        self.get_all_items()
+            .into_iter()
+            .map(GlossaryItem::get)
+            .collect()
+    }
+    pub fn get_all_items(&self) -> Vec<&GlossaryItem<A>> {
+        self.items.iter().filter_map(Option::as_ref).collect()
+    }
+
     #[doc(hidden)]
     pub fn __get_mut(&mut self, asset_id: assets::AssetId<A>) -> Option<&mut A> {
         let idx = asset_id.get() as usize;
@@ -350,19 +442,26 @@ impl<A: AssetGroup> RegistryGlossary<A> {
 }
 
 #[derive(Debug)]
-pub struct GlossaryItem<A: AssetGroup> {
+pub struct GlossaryItem<A: assets::AssetGroup> {
     asset: A,
     id: assets::AssetId<A>,
     asset_ref: assets::AssetRef,
+    collection_name: Option<String>,
     _marker: std::marker::PhantomData<A>,
 }
-impl<A: AssetGroup> GlossaryItem<A> {
+impl<A: assets::AssetGroup> GlossaryItem<A> {
     #[doc(hidden)]
-    fn __new(asset: A, asset_ref: assets::AssetRef, id: assets::AssetId<A>) -> Self {
+    fn __new(
+        asset: A,
+        asset_ref: assets::AssetRef,
+        id: assets::AssetId<A>,
+        collection_name: Option<String>,
+    ) -> Self {
         Self {
             asset,
             id,
             asset_ref,
+            collection_name,
             _marker: std::marker::PhantomData,
         }
     }
@@ -382,9 +481,25 @@ impl<A: AssetGroup> GlossaryItem<A> {
     pub fn get_ref(&self) -> &assets::AssetRef {
         &self.asset_ref
     }
+    pub fn collection_name(&self) -> Option<&str> {
+        self.collection_name.as_deref()
+    }
+
+    fn filter_ns(&self, namespace: Option<&str>) -> bool {
+        namespace.is_none_or(|filter| {
+            if let Some(prefix) = filter.strip_suffix(".*") {
+                self.get_ref()
+                    .namespace
+                    .strip_prefix(prefix)
+                    .is_some_and(|rest| rest.starts_with('.') && rest.len() > 1)
+            } else {
+                self.get_ref().namespace.as_ref() == filter
+            }
+        })
+    }
 }
 
-impl<A: AssetGroup> Display for GlossaryItem<A> {
+impl<A: assets::AssetGroup> Display for GlossaryItem<A> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{} (id: {})", self.asset_ref, self.id.get())
     }

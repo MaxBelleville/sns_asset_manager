@@ -21,65 +21,34 @@ pub use ron;
 #[doc(hidden)]
 pub use serde;
 
-#[cfg(feature = "bevy")]
-use bevy_ecs::prelude::*;
-#[cfg(feature = "bevy")]
-#[derive(Resource)]
-pub struct RegistryResource {
-    registry: registry::Registry,
-}
-#[cfg(feature = "bevy")]
-impl Default for RegistryResource {
-    fn default() -> Self {
-        Self {
-            registry: registry::initialize_registry(),
-        }
-    }
-}
-#[cfg(feature = "bevy")]
-impl RegistryResource {
-    pub fn process_assets(
-        &mut self,
-        paths: Vec<String>,
-        use_current_dir: bool,
-    ) -> Result<Vec<assets::AssetBundleNode>, String> {
-        let mut bundle_trees = Vec::new();
-        for path in paths {
-            let path = Path::new(&path);
-            bundle_trees.push(process_assets(&path, &mut self.registry, use_current_dir)?);
-        }
-        Ok(bundle_trees)
-    }
-}
-
 #[doc(hidden)]
 pub mod __macros {
+    pub use crate::assets::AssetGroup;
     pub use crate::declares::{EnumSelectionRaw, TagSelectionRaw};
     pub use crate::inventory;
-    pub use crate::registry::{AssetGroup, AssetRegistration};
+    pub use crate::registry::AssetRegistration;
     pub use crate::rhai;
     pub use crate::serde;
 }
 
 pub mod prelude {
     pub use crate::assets::{AssetId, AssetRef};
-    pub use crate::declares::{
-        DeclareEnum, DeclareEnumView, DeclareTag, DeclareTagView, EnumFlags, EnumSelectionView,
-    };
-    #[cfg(feature = "bevy")]
-    pub use crate::RegistryResource;
+    pub use crate::declares::{DeclareEnum, DeclareEnumView, EnumFlags, EnumSelectionView};
+    pub use crate::declares::{DeclareTag, DeclareTagView};
     #[cfg(not(feature = "bevy"))]
     pub use crate::process_assets;
+    #[cfg(feature = "bevy")]
+    pub use crate::registry::RegistryResource;
     #[cfg(not(feature = "bevy"))]
     pub use crate::registry::initialize_registry;
-    pub use crate::registry::{AssetGroup, GlossaryItem, Registry};
+    pub use crate::registry::{GlossaryItem, Registry};
     pub use crate::rhai::Dynamic;
     pub use crate::scripts::{RhaiScript, ScriptRuntime};
     pub use macros::MakeAsset;
 }
 
-pub type SymbolMap = HashMap<String, u32>;
-pub type PathGroups = (Vec<VfsPath>, Vec<VfsPath>, Vec<VfsPath>);
+type SymbolMap = HashMap<String, u32>;
+type PathGroups = (Vec<VfsPath>, Vec<VfsPath>, Vec<VfsPath>);
 
 pub fn process_assets(
     root: &Path,
@@ -108,7 +77,13 @@ pub fn process_assets(
             )
         })?;
         for header in headers {
-            loader(registry, header.asset_ref, &symbols, header.data.unwrap())?;
+            loader(
+                registry,
+                header.asset_ref,
+                header.collection_name,
+                &symbols,
+                header.data.unwrap(),
+            )?;
         }
     }
 
@@ -120,12 +95,18 @@ pub fn process_assets(
             )
         })?;
         for header in headers {
-            loader(registry, header.asset_ref, &symbols, header.data.unwrap())?;
+            loader(
+                registry,
+                header.asset_ref,
+                header.collection_name,
+                &symbols,
+                header.data.unwrap(),
+            )?;
         }
     }
 
     for header in processed.scripts {
-        registry.load_script(header, &symbols)?;
+        registry.__load_script(header, &symbols)?;
     }
 
     Ok(asset_bundles)
@@ -292,8 +273,6 @@ fn recursive_discovery(
                 normalized_include.ends_with(".ron"),
                 normalized_include.ends_with(".rhai"),
             );
-
-            println!("Path '{}' include '{}'", path.as_str(), include);
 
             let mut include_path = path.join(normalized_include).map_err(|e| {
                 format!(
@@ -480,6 +459,13 @@ fn combine_bundles(
     asset: &mut assets::AssetBundle,
     parent: &assets::AssetBundle,
 ) -> Result<(), String> {
+    if asset
+        .namespace
+        .as_deref()
+        .is_some_and(|namespace| namespace.contains('*'))
+    {
+        return Err("Bundle namespaces cannot contain '*'; wildcard syntax is reserved for registry queries".to_owned());
+    }
     //Combine namespace
     if parent.namespace.is_none() && asset.namespace.is_some() {
         asset.full_namespace = asset.namespace.clone().unwrap();

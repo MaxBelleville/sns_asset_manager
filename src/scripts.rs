@@ -1,4 +1,4 @@
-use crate::registry::{AssetGroup, AssetRegistration, GlossaryItem, Registry};
+use crate::registry::{AssetRegistration, GlossaryItem, Registry};
 use crate::{SymbolMap, assets};
 use rhai::{AST, Dynamic, Engine, EvalAltResult, Module, ModuleResolver, Position, Scope};
 use serde::Deserialize;
@@ -22,7 +22,7 @@ impl RhaiScript {
 #[derive(Debug, Deserialize, Clone)]
 pub struct RhaiScriptRaw;
 
-impl AssetGroup for RhaiScript {
+impl assets::AssetGroup for RhaiScript {
     const STRUCT_NAME: &'static str = "RhaiScript";
     type Raw = RhaiScriptRaw;
     type View = ();
