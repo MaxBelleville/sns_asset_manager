@@ -1,0 +1,10 @@
+[(
+asset_type:Static,
+struct_name:"BasicA",
+data: (is_loaded:true)
+),
+(
+asset_type:Static,
+struct_name:"BasicB",
+data: (parent:["core.sub:asset"],is_loaded:true)
+)]

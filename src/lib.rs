@@ -280,13 +280,22 @@ fn recursive_discovery(
                 ));
             }
 
+            let normalized_include = include.trim_end_matches('/');
+            let normalized_include = if normalized_include.is_empty() {
+                include.as_str()
+            } else {
+                normalized_include
+            };
+
             let (is_bundle, is_ron, is_rhai) = (
-                include.as_str().ends_with(".bundle.ron"),
-                include.as_str().ends_with(".ron"),
-                include.as_str().ends_with(".rhai"),
+                normalized_include.ends_with(".bundle.ron"),
+                normalized_include.ends_with(".ron"),
+                normalized_include.ends_with(".rhai"),
             );
 
-            let mut include_path = path.join(include).map_err(|e| {
+            println!("Path '{}' include '{}'", path.as_str(), include);
+
+            let mut include_path = path.join(normalized_include).map_err(|e| {
                 format!(
                     "Failed to join include path {} with directory {}: {}",
                     include,
@@ -298,7 +307,7 @@ fn recursive_discovery(
             if is_bundle {
                 // If it's a bundle, set path to the folder it's in we we recursively load in later.
                 include_path = include_path.parent();
-            } else if !is_rhai && !is_ron && include_path.is_file().is_ok() {
+            } else if !is_rhai && !is_ron && include_path.is_file().unwrap_or(false) {
                 //If path doesn't end in ron or rhai extention, then we need to check if it's a file.
                 Err(format!(
                     "Unknown file type for include: {}",
@@ -323,7 +332,7 @@ fn recursive_discovery(
                         is_rhai,
                     )?;
                 }
-            } else if include_path.is_dir().is_ok() {
+            } else if include_path.is_dir().unwrap_or(false) {
                 if include_path != path {
                     let child_node = recursive_discovery(
                         processed_files,

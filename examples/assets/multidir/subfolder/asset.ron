@@ -1,0 +1,5 @@
+(
+asset_type:Static,
+struct_name:"BasicB",
+data: (parent:["core:asset2"],is_loaded:false)
+)
