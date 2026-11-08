@@ -467,11 +467,11 @@ fn combine_bundles(
         return Err("Bundle namespaces cannot contain '*'; wildcard syntax is reserved for registry queries".to_owned());
     }
     //Combine namespace
-    if parent.namespace.is_none() && asset.namespace.is_some() {
+    if parent.full_namespace.is_empty() && asset.namespace.is_some() {
         asset.full_namespace = asset.namespace.clone().unwrap();
-    } else if parent.namespace.is_some() && asset.namespace.is_none() {
+    } else if !parent.full_namespace.is_empty() && asset.namespace.is_none() {
         asset.full_namespace = parent.full_namespace.clone();
-    } else if parent.namespace.is_some() && asset.namespace.is_some() {
+    } else if !parent.full_namespace.is_empty() && asset.namespace.is_some() {
         asset.full_namespace = format!(
             "{}.{}",
             parent.full_namespace,
