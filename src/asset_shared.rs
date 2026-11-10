@@ -59,7 +59,7 @@ pub trait AssetGroup: Sized + Send + Sync + 'static {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Hash, PartialEq, Eq)]
 pub struct AssetVal<T> {
     val: u32,
     _marker: std::marker::PhantomData<T>,
