@@ -78,7 +78,7 @@ impl RegistryResource {
         &mut self.registry
     }
 
-    pub fn script(&mut self) -> &mut scripts::ScriptRuntime {
+    pub fn script(&mut self) -> &mut ScriptRuntime {
         self.registry.script()
     }
 
