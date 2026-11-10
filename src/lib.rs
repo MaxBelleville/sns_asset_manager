@@ -6,8 +6,8 @@ use vfs::{PhysicalFS, VfsPath, ZipFS};
 
 use ron::extensions::Extensions;
 use ron::options::Options;
-
-mod assets;
+mod asset_header;
+mod asset_shared;
 mod declares;
 mod registry;
 mod scripts;
@@ -21,9 +21,13 @@ pub use ron;
 #[doc(hidden)]
 pub use serde;
 
+use asset_header::{
+    AssetBundle, AssetBundleNode, AssetHeader, AssetType, ProcessedAssets, RawAssetSource,
+};
+
 #[doc(hidden)]
 pub mod __macros {
-    pub use crate::assets::AssetGroup;
+    pub use crate::asset_shared::AssetGroup;
     pub use crate::declares::{EnumSelectionRaw, TagSelectionRaw};
     pub use crate::inventory;
     pub use crate::registry::AssetRegistration;
@@ -32,7 +36,7 @@ pub mod __macros {
 }
 
 pub mod prelude {
-    pub use crate::assets::{AssetId, AssetRef};
+    pub use crate::asset_shared::{AssetId, AssetRef, AssetVal, CollectionId};
     pub use crate::declares::{DeclareEnum, DeclareEnumView, EnumFlags, EnumSelectionView};
     pub use crate::declares::{DeclareTag, DeclareTagView};
     #[cfg(not(feature = "bevy"))]
@@ -54,7 +58,7 @@ pub fn process_assets(
     root: &Path,
     registry: &mut registry::Registry,
     use_current_dir: bool,
-) -> Result<assets::AssetBundleNode, String> {
+) -> Result<AssetBundleNode, String> {
     let vfs_path = get_vfs_path(root, use_current_dir)?;
     let mut processed_files = HashSet::new();
     let mut collected_assets = HashMap::new();
@@ -62,11 +66,28 @@ pub fn process_assets(
         &mut processed_files,
         &mut collected_assets,
         vfs_path,
-        assets::AssetBundle::default(),
+        AssetBundle::default(),
         true,
     )?;
 
-    let (processed, symbols) = split_and_categorize_headers(collected_assets)?;
+    let mut catalog = collected_assets.values().cloned().collect::<Vec<_>>();
+    catalog.sort_by_key(|header| header.get_id().map(ToString::to_string).unwrap_or_default());
+
+    let (mut processed, symbols) = split_and_categorize_headers(collected_assets)?;
+
+    if let Some(tag_headers) = processed.declares.get_mut("DeclareTag") {
+        for header in tag_headers {
+            let tag_id = header
+                .asset_ref
+                .get_id()
+                .ok_or_else(|| "Declare(Tag) header is missing its asset ID".to_owned())?;
+            let data = header
+                .data
+                .take()
+                .ok_or_else(|| format!("Missing data for Declare(Tag) {}", tag_id))?;
+            header.data = Some(declares::expand_tag_selectors(data, tag_id, &catalog)?);
+        }
+    }
 
     // Declarations are loaded first because static fields may depend on them.
     for (struct_name, headers) in processed.declares {
@@ -77,13 +98,7 @@ pub fn process_assets(
             )
         })?;
         for header in headers {
-            loader(
-                registry,
-                header.asset_ref,
-                header.collection_name,
-                &symbols,
-                header.data.unwrap(),
-            )?;
+            loader(registry, header.asset_ref, &symbols, header.data.unwrap())?;
         }
     }
 
@@ -95,13 +110,7 @@ pub fn process_assets(
             )
         })?;
         for header in headers {
-            loader(
-                registry,
-                header.asset_ref,
-                header.collection_name,
-                &symbols,
-                header.data.unwrap(),
-            )?;
+            loader(registry, header.asset_ref, &symbols, header.data.unwrap())?;
         }
     }
 
@@ -157,9 +166,9 @@ fn is_zip(path_buf: &PathBuf) -> bool {
 }
 
 fn split_and_categorize_headers(
-    collected_assets: HashMap<String, assets::AssetHeader>,
-) -> Result<(assets::ProcessedAssets, SymbolMap), String> {
-    let mut processed = assets::ProcessedAssets::default();
+    collected_assets: HashMap<String, AssetHeader>,
+) -> Result<(ProcessedAssets, SymbolMap), String> {
+    let mut processed = ProcessedAssets::default();
 
     let mut symbol_map = SymbolMap::new();
     //  let mut asset_types = HashMap::new();
@@ -168,15 +177,15 @@ fn split_and_categorize_headers(
     let mut assets_vec: Vec<_> = collected_assets.into_iter().collect();
     assets_vec.sort_by(|(a, _), (b, _)| a.cmp(b));
 
-    for (asset_ref, header) in assets_vec {
+    for (asset_id, header) in assets_vec {
         if let Some(ref struct_name) = header.struct_name {
             let count = struct_counter.entry(struct_name.clone()).or_insert(0);
             *count += 1;
-            //   asset_types.insert(asset_ref.clone(), struct_name.clone());
-            symbol_map.insert(asset_ref, (*count).saturating_sub(1));
+            //   asset_types.insert(asset_id.clone(), struct_name.clone());
+            symbol_map.insert(asset_id, (*count).saturating_sub(1));
         }
         match header.asset_type {
-            assets::AssetType::Declare(_) => {
+            AssetType::Declare(_) => {
                 let struct_name = header.struct_name.as_ref().unwrap();
                 processed
                     .declares
@@ -184,7 +193,7 @@ fn split_and_categorize_headers(
                     .or_default()
                     .push(header);
             }
-            assets::AssetType::Static => {
+            AssetType::Static => {
                 let struct_name = header.struct_name.as_ref().unwrap();
 
                 // Group into the HashMap by struct_name
@@ -194,7 +203,7 @@ fn split_and_categorize_headers(
                     .or_default()
                     .push(header);
             }
-            assets::AssetType::Script => {
+            AssetType::Script => {
                 processed.scripts.push(header);
             }
         }
@@ -205,11 +214,11 @@ fn split_and_categorize_headers(
 
 fn recursive_discovery(
     processed_files: &mut HashSet<String>,
-    collected_assets: &mut HashMap<String, assets::AssetHeader>,
+    collected_assets: &mut HashMap<String, AssetHeader>,
     path: VfsPath,
-    parent_bundle: assets::AssetBundle,
+    parent_bundle: AssetBundle,
     is_root: bool,
-) -> Result<assets::AssetBundleNode, String> {
+) -> Result<AssetBundleNode, String> {
     if path.is_dir().is_err() {
         return Err(format!("Path {} is not a directory", path.as_str()));
     }
@@ -236,10 +245,10 @@ fn recursive_discovery(
         ));
     }
 
-    let mut asset_bundle: assets::AssetBundle = if bundle_paths.len() == 1 {
+    let mut asset_bundle: AssetBundle = if bundle_paths.len() == 1 {
         parse_ron_file(&bundle_paths[0], "Failed to parse bundle file")?
     } else {
-        assets::AssetBundle::default()
+        AssetBundle::default()
     };
 
     combine_bundles(&mut asset_bundle, &parent_bundle)?;
@@ -347,7 +356,7 @@ fn recursive_discovery(
         }
     }
 
-    Ok(assets::AssetBundleNode {
+    Ok(AssetBundleNode {
         path,
         bundle: asset_bundle,
         children,
@@ -355,18 +364,21 @@ fn recursive_discovery(
 }
 
 fn gather_headers(
-    collected_assets: &mut HashMap<String, assets::AssetHeader>,
+    collected_assets: &mut HashMap<String, AssetHeader>,
     path: VfsPath,
     namespace: String,
     is_rhai: bool,
 ) -> Result<(), String> {
     let headers = if is_rhai {
-        create_rhai_header(path, namespace)
+        create_rhai_header(path, namespace)?
     } else {
         create_ron_headers(path, namespace)?
     };
     for header in headers {
-        let key: String = header.asset_ref.to_string();
+        let key: String = header
+            .get_id()
+            .expect("asset headers always have an asset ID")
+            .to_string();
         if collected_assets.contains_key(&key) {
             eprintln!("Warning duplicate asset {} found skipping", key);
         } else {
@@ -377,27 +389,19 @@ fn gather_headers(
 }
 
 /// Parses a .rhai file and returns a single script header
-fn create_rhai_header(path: VfsPath, namespace: String) -> Vec<assets::AssetHeader> {
+fn create_rhai_header(path: VfsPath, namespace: String) -> Result<Vec<AssetHeader>, String> {
     let script_name = path.filename().replace(".rhai", "");
-    vec![assets::AssetHeader::new_script(
-        path,
-        script_name,
-        namespace,
-    )]
+    Ok(vec![AssetHeader::new_script(path, script_name, namespace)?])
 }
 
 /// Parses a .ron file (which can be a single asset or a list) and returns headers
-fn create_ron_headers(
-    path: VfsPath,
-    namespace: String,
-) -> Result<Vec<assets::AssetHeader>, String> {
-    let raw_source: assets::RawAssetSource =
-        parse_ron_file(&path, "Failed to parse ron asset file")?;
+fn create_ron_headers(path: VfsPath, namespace: String) -> Result<Vec<AssetHeader>, String> {
+    let raw_source: RawAssetSource = parse_ron_file(&path, "Failed to parse ron asset file")?;
     let path_name = path.filename().replace(".ron", "");
 
     let raw_headers = match raw_source {
-        assets::RawAssetSource::Single(raw) => vec![raw],
-        assets::RawAssetSource::List(list) => list,
+        RawAssetSource::Single(raw) => vec![raw],
+        RawAssetSource::List(list) => list,
     };
 
     let mut headers = Vec::new();
@@ -407,7 +411,7 @@ fn create_ron_headers(
         if i > 0 {
             full_path_name += &(i + 1).to_string();
         }
-        headers.push(assets::AssetHeader::new(
+        headers.push(AssetHeader::new(
             raw,
             path.clone(),
             full_path_name,
@@ -455,16 +459,23 @@ where
         .map_err(|e| format!("{} {}: {}", error_str, vfspath.as_str(), e))
 }
 ///Reads in parent and current asset bundle, and appends namespace where necessary
-fn combine_bundles(
-    asset: &mut assets::AssetBundle,
-    parent: &assets::AssetBundle,
-) -> Result<(), String> {
+fn combine_bundles(asset: &mut AssetBundle, parent: &AssetBundle) -> Result<(), String> {
     if asset
         .namespace
         .as_deref()
         .is_some_and(|namespace| namespace.contains('*'))
     {
-        return Err("Bundle namespaces cannot contain '*'; wildcard syntax is reserved for registry queries".to_owned());
+        return Err("Bundle namespaces cannot contain '*'; reserved symbol".to_owned());
+    }
+    if asset
+        .namespace
+        .as_deref()
+        .is_some_and(|namespace| namespace.contains('.'))
+    {
+        return Err(
+            "Bundle namespaces cannot contain '.'; use nested bundles for namespace hierarchy"
+                .to_owned(),
+        );
     }
     //Combine namespace
     if parent.full_namespace.is_empty() && asset.namespace.is_some() {

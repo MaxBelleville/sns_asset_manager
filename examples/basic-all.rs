@@ -11,7 +11,7 @@ pub struct BasicEnum {
 #[derive(Debug, MakeAsset)]
 pub struct BasicFlag {
     is_loaded: bool,
-    tag: AssetId<DeclareTag>,
+    tag: AssetVal<DeclareTag>,
 }
 
 pub fn main() {
@@ -40,7 +40,7 @@ pub fn main() {
 
     let script_result = registry
         .call_rhai_fn(
-            &AssetRef::from("core:script".to_string()),
+            &AssetId::from("core:script".to_string()),
             "callback",
             vec![Dynamic::from(21_i64)],
         )

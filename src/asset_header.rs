@@ -1,30 +1,18 @@
-use super::{SymbolMap, registry};
+use super::asset_shared::{AssetId, AssetRef, CollectionId};
 use heck::ToUpperCamelCase;
-use rhai::{CustomType, Dynamic, TypeBuilder};
 use semver::Version;
 use serde::{
     Deserialize, Deserializer,
     de::{
-        DeserializeOwned, MapAccess, SeqAccess, Visitor,
+        MapAccess, SeqAccess, Visitor,
         value::{MapAccessDeserializer, SeqAccessDeserializer},
     },
 };
 use std::{
     collections::HashMap,
-    fmt::{self, Display},
-    hash::Hash,
-    marker::PhantomData,
-    sync::Arc,
+    fmt::{self},
 };
 use vfs::VfsPath;
-
-/* "Pass 1" Asset Structs (Used in file io parsing, and asset organizing)
- *  Currently three major types are 1. Declare(internally defined assets that modify 'static' assets)
- *  ex: biome_flags Declare(Enum) with list of all available biome types.
- *  2. Static, externally defined Assets that hold custom values or references to other assets.
- *  ex: biome which includes weights for the chance of that biome, as well as a few biome_rules
- *  3. Script, a way to add simple custom functionality to asset or series of assets.
- */
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub enum DeclareType {
@@ -109,7 +97,6 @@ pub struct AssetHeader {
     pub(crate) asset_ref: AssetRef,
     pub(crate) asset_type: AssetType,
     pub(crate) struct_name: Option<String>,
-    pub(crate) collection_name: Option<String>,
     pub(crate) data: Option<ron::Value>,
 }
 
@@ -125,6 +112,11 @@ impl AssetHeader {
         } else {
             path_name
         };
+        Self::check_wildcard(
+            name.clone(),
+            namespace.clone(),
+            raw.collection_name.as_deref(),
+        )?;
 
         if matches!(&raw.asset_type, AssetType::Static) && raw.struct_name.is_none() {
             return Err(format!(
@@ -147,22 +139,55 @@ impl AssetHeader {
         };
         Ok(Self {
             path,
-            asset_ref: AssetRef::new(namespace, name),
+            asset_ref: AssetRef::new(namespace, name, raw.collection_name),
             asset_type: raw.asset_type,
             struct_name: Some(struct_name),
-            collection_name: raw.collection_name,
             data: Some(raw.data),
         })
     }
-    pub fn new_script(path: VfsPath, path_name: String, namespace: String) -> Self {
-        Self {
+    pub fn new_script(path: VfsPath, path_name: String, namespace: String) -> Result<Self, String> {
+        Self::check_wildcard(path_name.clone(), namespace.clone(), None)?;
+        Ok(Self {
             path,
-            asset_ref: AssetRef::new(namespace, path_name),
+            asset_ref: AssetRef::new_id(namespace, path_name),
             asset_type: AssetType::Script,
             struct_name: Some("RhaiScript".to_owned()),
-            collection_name: None,
             data: None,
+        })
+    }
+    fn check_wildcard(
+        name: String,
+        namespace: String,
+        collection: Option<&str>,
+    ) -> Result<(), String> {
+        if name.contains('*') {
+            return Err(format!(
+                "Asset names cannot contain '*': {}:{}",
+                namespace, name
+            ));
         }
+        if collection.is_some_and(|name| name.contains(':')) {
+            return Err(format!(
+                "Collection names cannot contain ':' for asset {}:{}",
+                namespace, name
+            ));
+        }
+        if namespace.contains('#') {
+            return Err(format!(
+                "Asset namespaces cannot contain '#': {}:{}",
+                namespace, name
+            ));
+        }
+        Ok(())
+    }
+    pub(crate) fn get_id(&self) -> Option<&AssetId> {
+        self.asset_ref.get_id()
+    }
+    pub(crate) fn get_collection(&self) -> Option<&CollectionId> {
+        self.asset_ref.get_collection_id()
+    }
+    pub(crate) fn check_struct(&self, struct_type: &str) -> bool {
+        self.struct_name.as_deref() == Some(struct_type)
     }
 }
 
@@ -242,168 +267,9 @@ impl Default for AssetBundle {
     }
 }
 
-//"Shared" Assets structs (Structures that are helpful in both pass 1 and pass 2)
-
 #[derive(Debug, Clone, Default)]
 pub struct ProcessedAssets {
     pub(crate) declares: HashMap<String, Vec<AssetHeader>>,
     pub(crate) statics: HashMap<String, Vec<AssetHeader>>,
     pub(crate) scripts: Vec<AssetHeader>,
-}
-
-pub trait AssetGroup: Sized + Send + Sync + 'static {
-    const STRUCT_NAME: &'static str;
-    type Raw: DeserializeOwned;
-    type View: Clone + Send + Sync;
-
-    fn view_from_raw(
-        _raw: &Self::Raw,
-        _registry: &registry::Registry,
-    ) -> Result<Option<Dynamic>, String> {
-        Ok(None)
-    }
-
-    fn from_raw(
-        raw: Self::Raw,
-        registry: &mut registry::Registry,
-        symbols: &SymbolMap,
-    ) -> Result<Self, String>;
-
-    fn load_ron_asset(
-        registry: &mut registry::Registry,
-        asset_ref: AssetRef,
-        collection_name: Option<String>,
-        symbols: &SymbolMap,
-        data: ron::Value,
-    ) -> Result<(), String> {
-        let asset_ref_string = asset_ref.to_string();
-        let raw: Self::Raw = data
-            .into_rust()
-            .map_err(|error| format!("{} - {}: {}", Self::STRUCT_NAME, asset_ref_string, error))?;
-
-        let id = symbols.get(&asset_ref_string).ok_or_else(|| {
-            format!(
-                "No assigned asset ID for {} ({})",
-                Self::STRUCT_NAME,
-                asset_ref_string
-            )
-        })?;
-
-        let view = Self::view_from_raw(&raw, registry)?;
-
-        let asset = Self::from_raw(raw, registry, symbols)?;
-        let view_ref = asset_ref.clone();
-
-        let glossary = registry
-            .__get_mut::<Self>()
-            .ok_or_else(|| format!("Glossary not found for type: {}", Self::STRUCT_NAME))?;
-
-        glossary.__insert_from_header(asset, asset_ref, *id, collection_name)?;
-        if let Some(view) = view {
-            registry.script().insert_view(view_ref, view);
-        }
-        Ok(())
-    }
-}
-
-#[derive(Debug, Default)]
-pub struct AssetId<T> {
-    id: u32,
-    _marker: std::marker::PhantomData<T>,
-}
-impl<T> Copy for AssetId<T> {}
-
-impl<T> Clone for AssetId<T> {
-    fn clone(&self) -> Self {
-        Self {
-            id: self.id,
-            _marker: PhantomData,
-        }
-    }
-}
-
-impl<T> From<u32> for AssetId<T> {
-    fn from(value: u32) -> Self {
-        Self {
-            id: value,
-            _marker: PhantomData,
-        }
-    }
-}
-impl<T> Display for AssetId<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.id)
-    }
-}
-
-impl<T> AssetId<T> {
-    pub fn get(&self) -> u32 {
-        return self.id;
-    }
-}
-
-#[derive(Hash, Eq, PartialEq, Clone, Debug, Default)]
-pub struct AssetRef {
-    pub namespace: Arc<str>,
-    pub name: Arc<str>,
-}
-impl AssetRef {
-    fn new(namespace: String, name: String) -> Self {
-        Self {
-            namespace: namespace.into(),
-            name: name.into(),
-        }
-    }
-}
-
-impl CustomType for AssetRef {
-    fn build(mut builder: TypeBuilder<Self>) {
-        builder
-            .with_name("AssetRef")
-            .with_get("namespace", |asset_ref: &mut Self| {
-                asset_ref.namespace.to_string()
-            })
-            .with_get("name", |asset_ref: &mut Self| asset_ref.name.to_string());
-    }
-}
-
-impl From<String> for AssetRef {
-    fn from(s: String) -> Self {
-        let mut parts = s.split(':');
-        if parts.clone().count() != 2 {
-            eprintln!("Warning: malformed asset ref {}", s)
-        };
-        Self {
-            namespace: parts.next().unwrap_or("").into(),
-            name: parts.next().unwrap_or("").into(),
-        }
-    }
-}
-impl Display for AssetRef {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}:{}", self.namespace, self.name)
-    }
-}
-
-impl<'de> Deserialize<'de> for AssetRef {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        let mut parts = s.split(':');
-        if parts.clone().count() != 2 {
-            eprintln!("Warning: malformed asset ref {}", s)
-        };
-        let namespace = parts
-            .next()
-            .ok_or_else(|| serde::de::Error::custom("missing namespace"))?;
-        let name = parts
-            .next()
-            .ok_or_else(|| serde::de::Error::custom("missing name"))?;
-        Ok(AssetRef {
-            namespace: namespace.into(),
-            name: name.into(),
-        })
-    }
 }

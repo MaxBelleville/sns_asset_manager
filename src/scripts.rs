@@ -1,5 +1,7 @@
-use crate::registry::{AssetRegistration, GlossaryItem, Registry};
-use crate::{SymbolMap, assets};
+use super::SymbolMap;
+use super::asset_header::AssetHeader;
+use super::asset_shared::{AssetGroup, AssetId, AssetRef};
+use super::registry::{AssetRegistration, GlossaryItem, Registry};
 use rhai::{AST, Dynamic, Engine, EvalAltResult, Module, ModuleResolver, Position, Scope};
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -9,12 +11,12 @@ use std::sync::{Arc, RwLock};
 /// A script entry stored in the registry. Its typed ID addresses compiled code in `ScriptRuntime`.
 #[derive(Debug, Clone)]
 pub struct RhaiScript {
-    asset_ref: assets::AssetRef,
+    asset_id: AssetId,
 }
 
 impl RhaiScript {
-    pub fn asset_ref(&self) -> &assets::AssetRef {
-        &self.asset_ref
+    pub fn asset_id(&self) -> &AssetId {
+        &self.asset_id
     }
 }
 
@@ -22,7 +24,7 @@ impl RhaiScript {
 #[derive(Debug, Deserialize, Clone)]
 pub struct RhaiScriptRaw;
 
-impl assets::AssetGroup for RhaiScript {
+impl AssetGroup for RhaiScript {
     const STRUCT_NAME: &'static str = "RhaiScript";
     type Raw = RhaiScriptRaw;
     type View = ();
@@ -36,8 +38,39 @@ impl assets::AssetGroup for RhaiScript {
     }
 }
 
-type ViewStore = Arc<RwLock<HashMap<assets::AssetRef, Dynamic>>>;
-type ProgramStore = Arc<RwLock<HashMap<assets::AssetRef, AST>>>;
+type ViewStore = Arc<RwLock<HashMap<AssetId, StoredView>>>;
+type ProgramStore = Arc<RwLock<HashMap<AssetId, AST>>>;
+
+#[derive(Clone)]
+struct StoredView {
+    value: Dynamic,
+    collection_name: Option<String>,
+}
+
+fn optional_filter(value: Dynamic, parameter: &str) -> Result<Option<String>, Box<EvalAltResult>> {
+    if value.is_unit() {
+        return Ok(None);
+    }
+    if value.is::<rhai::ImmutableString>() {
+        return Ok(Some(value.cast::<rhai::ImmutableString>().to_string()));
+    }
+    Err(Box::new(EvalAltResult::ErrorRuntime(
+        Dynamic::from(format!(
+            "lookup_filtered {parameter} must be a string or ()"
+        )),
+        Position::NONE,
+    )))
+}
+
+fn namespace_matches(namespace: &str, filter: &str) -> bool {
+    if let Some(prefix) = filter.strip_suffix(".*") {
+        namespace
+            .strip_prefix(prefix)
+            .is_some_and(|rest| rest.starts_with('.') && rest.len() > 1)
+    } else {
+        namespace == filter
+    }
+}
 
 /// Owns the Rhai engine, compiled programs, and read-only asset views.
 pub struct ScriptRuntime {
@@ -55,36 +88,69 @@ impl Default for ScriptRuntime {
 
 impl ScriptRuntime {
     pub fn new() -> Self {
-        let views = Arc::new(RwLock::new(HashMap::<assets::AssetRef, Dynamic>::new()));
-        let program_refs = Arc::new(RwLock::new(HashMap::<assets::AssetRef, AST>::new()));
+        let views = Arc::new(RwLock::new(HashMap::<AssetId, StoredView>::new()));
+        let program_refs = Arc::new(RwLock::new(HashMap::<AssetId, AST>::new()));
         let mut engine = Engine::new();
 
-        engine.build_type::<assets::AssetRef>();
-        engine.register_fn(
-            "==",
-            |left: &mut assets::AssetRef, right: assets::AssetRef| *left == right,
+        engine.build_type::<AssetId>();
+        engine.register_fn("==", |left: &mut AssetId, right: AssetId| *left == right);
+        engine.register_fn("!=", |left: &mut AssetId, right: AssetId| *left != right);
+
+        let mut asset_id_module = Module::new();
+
+        asset_id_module.set_native_fn(
+            "from",
+            |value: rhai::ImmutableString| -> Result<AssetId, Box<EvalAltResult>> {
+                AssetId::parse(value.as_str()).map_err(|error| {
+                    Box::new(EvalAltResult::ErrorRuntime(
+                        Dynamic::from(error),
+                        Position::NONE,
+                    ))
+                })
+            },
         );
-        engine.register_fn(
-            "!=",
-            |left: &mut assets::AssetRef, right: assets::AssetRef| *left != right,
-        );
 
-        let mut asset_ref_module = Module::new();
-
-        asset_ref_module.set_native_fn("from", |value: rhai::ImmutableString| {
-            Ok::<_, Box<EvalAltResult>>(assets::AssetRef::from(value.to_string()))
-        });
-
-        engine.register_static_module("AssetRef", asset_ref_module.into());
+        engine.register_static_module("AssetId", asset_id_module.into());
 
         let view_lookup = Arc::clone(&views);
-        engine.register_fn("lookup_asset", move |asset_ref: assets::AssetRef| {
+        engine.register_fn("lookup_asset", move |asset_id: AssetId| {
             view_lookup
                 .read()
                 .ok()
-                .and_then(|assets| assets.get(&asset_ref).cloned())
+                .and_then(|assets| assets.get(&asset_id).map(|view| view.value.clone()))
                 .unwrap_or(Dynamic::UNIT)
         });
+
+        let filtered_view_lookup = Arc::clone(&views);
+        engine.register_fn(
+            "lookup_filtered",
+            move |namespace: Dynamic,
+                  collection: Dynamic|
+                  -> Result<rhai::Array, Box<EvalAltResult>> {
+                let namespace = optional_filter(namespace, "namespace")?;
+                let collection = optional_filter(collection, "collection")?;
+                let views = filtered_view_lookup.read().map_err(|_| {
+                    Box::new(EvalAltResult::ErrorRuntime(
+                        Dynamic::from("Asset view store is unavailable"),
+                        Position::NONE,
+                    ))
+                })?;
+                let mut matching = views
+                    .iter()
+                    .filter(|(asset_id, view)| {
+                        namespace
+                            .as_deref()
+                            .is_none_or(|filter| namespace_matches(&asset_id.namespace, filter))
+                            && collection.as_deref().is_none_or(|filter| {
+                                view.collection_name.as_deref() == Some(filter)
+                            })
+                    })
+                    .map(|(asset_id, view)| (asset_id.to_string(), view.value.clone()))
+                    .collect::<Vec<_>>();
+                matching.sort_by(|left, right| left.0.cmp(&right.0));
+                Ok(matching.into_iter().map(|(_, value)| value).collect())
+            },
+        );
 
         engine.register_fn("is_unit", |value: &mut Dynamic| value.is_unit());
 
@@ -105,44 +171,61 @@ impl ScriptRuntime {
         &mut self.engine
     }
 
-    pub(crate) fn insert_view(&mut self, asset_ref: assets::AssetRef, view: Dynamic) {
-        if let Ok(mut views) = self.views.write() {
-            views.insert(asset_ref, view);
-        }
+    pub(crate) fn insert_view(&mut self, asset_ref: AssetRef, view: Dynamic) -> Result<(), String> {
+        let asset_id = asset_ref
+            .get_id()
+            .ok_or_else(|| "Cannot register a view without an AssetId".to_owned())?
+            .clone();
+        let mut views = self
+            .views
+            .write()
+            .map_err(|_| "Asset view store is unavailable".to_owned())?;
+        views.insert(
+            asset_id,
+            StoredView {
+                value: view,
+                collection_name: asset_ref.get_collection_name().map(str::to_owned),
+            },
+        );
+        Ok(())
     }
 
     pub(crate) fn load_script(
         &mut self,
-        header: assets::AssetHeader,
+        header: AssetHeader,
         symbols: &SymbolMap,
     ) -> Result<(RhaiScript, u32), String> {
-        let asset_ref = header.asset_ref.clone();
-        let asset_ref_string = asset_ref.to_string();
+        let asset_id = header
+            .get_id()
+            .ok_or_else(|| "Script header is missing its AssetId".to_owned())?
+            .clone();
+        let asset_id_string = asset_id.to_string();
 
         let id = *symbols
-            .get(&asset_ref_string)
-            .ok_or_else(|| format!("No assigned script ID for {asset_ref_string}"))?;
+            .get(&asset_id_string)
+            .ok_or_else(|| format!("No assigned script ID for {asset_id_string}"))?;
 
         let mut file = header
             .path
             .open_file()
-            .map_err(|error| format!("Could not open script {asset_ref_string}: {error}"))?;
+            .map_err(|error| format!("Could not open script {asset_id_string}: {error}"))?;
         let mut source = String::new();
+
         file.read_to_string(&mut source)
-            .map_err(|error| format!("Could not read script {asset_ref_string}: {error}"))?;
+            .map_err(|error| format!("Could not read script {asset_id_string}: {error}"))?;
 
         let mut ast = self
             .engine
             .compile(&source)
-            .map_err(|error| format!("Failed to compile script {asset_ref_string}: {error}"))?;
-        ast.set_source(asset_ref_string.clone());
+            .map_err(|error| format!("Failed to compile script {asset_id_string}: {error}"))?;
+        ast.set_source(asset_id_string.clone());
 
         if let Ok(mut programs) = self.program_refs.write() {
-            programs.insert(asset_ref.clone(), ast.clone());
+            programs.insert(asset_id.clone(), ast.clone());
         }
         self.programs.insert(id, ast);
 
-        Ok((RhaiScript { asset_ref }, id))
+        Ok((RhaiScript { asset_id }, id))
     }
 
     /// Invoke a named Rhai function from a script registered in `registry`.
@@ -152,10 +235,10 @@ impl ScriptRuntime {
         function: &str,
         args: Vec<Dynamic>,
     ) -> Result<Dynamic, String> {
-        let ast = self.programs.get(&script_item.get_id()).ok_or_else(|| {
+        let ast = self.programs.get(&script_item.get_val()).ok_or_else(|| {
             format!(
                 "Compiled program for script {} is not available",
-                script_item.get_ref()
+                script_item.get_id()
             )
         })?;
         let mut scope = Scope::new();
@@ -170,7 +253,7 @@ impl ScriptRuntime {
             .map_err(|error| {
                 format!(
                     "Failed to call '{function}' in script {}: {error}",
-                    script_item.get_ref()
+                    script_item.get_id()
                 )
             })
     }
@@ -188,12 +271,12 @@ impl ModuleResolver for AssetModuleResolver {
         path: &str,
         position: Position,
     ) -> Result<rhai::Shared<Module>, Box<EvalAltResult>> {
-        let asset_ref = assets::AssetRef::from(path.to_owned());
+        let asset_id = AssetId::from(path.to_owned());
         let ast = self
             .programs
             .read()
             .ok()
-            .and_then(|programs| programs.get(&asset_ref).cloned())
+            .and_then(|programs| programs.get(&asset_id).cloned())
             .ok_or_else(|| {
                 Box::new(EvalAltResult::ErrorModuleNotFound(
                     path.to_owned(),
@@ -218,11 +301,11 @@ impl ModuleResolver for AssetModuleResolver {
         path: &str,
         _position: Position,
     ) -> Option<Result<AST, Box<EvalAltResult>>> {
-        let asset_ref = assets::AssetRef::from(path.to_owned());
+        let asset_id = AssetId::from(path.to_owned());
         self.programs
             .read()
             .ok()
-            .and_then(|programs| programs.get(&asset_ref).cloned())
+            .and_then(|programs| programs.get(&asset_id).cloned())
             .map(Ok)
     }
 }

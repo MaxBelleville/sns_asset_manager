@@ -88,12 +88,12 @@ pub(crate) fn parse_container_and_inner(ty: &syn::Type) -> (structs::ContainerTy
     (structs::ContainerType::Single, ty.clone())
 }
 
-pub(crate) fn asset_id_target(ty: &syn::Type) -> Option<syn::Type> {
+pub(crate) fn asset_val_target(ty: &syn::Type) -> Option<syn::Type> {
     let syn::Type::Path(type_path) = ty else {
         return None;
     };
     let segment = type_path.path.segments.last()?;
-    if segment.ident != "AssetId" {
+    if segment.ident != "AssetVal" {
         return None;
     }
     let syn::PathArguments::AngleBracketed(args) = &segment.arguments else {

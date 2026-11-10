@@ -10,8 +10,8 @@ pub(crate) fn asset_fields(fields: Vec<&syn::Field>) -> Vec<structs::FieldInfo> 
 
         let (container, inner_ty) = utils::parse_container_and_inner(&ty);
 
-        let processor = utils::asset_id_target(&inner_ty)
-            .map(|target| asset_id_processor(target))
+        let processor = utils::asset_val_target(&inner_ty)
+            .map(|target| asset_val_processor(target))
             .or_else(|| declared_field_processor(&inner_ty));
 
         result.push(structs::FieldInfo::new(
@@ -27,7 +27,7 @@ pub(crate) fn asset_fields(fields: Vec<&syn::Field>) -> Vec<structs::FieldInfo> 
     result
 }
 
-fn asset_id_processor(target: syn::Type) -> structs::FieldProcessor {
+fn asset_val_processor(target: syn::Type) -> structs::FieldProcessor {
     let target_name = utils::last_type_name(&target);
     let definition = target_name.as_deref().and_then(asset_container_definition);
     match definition {
@@ -36,13 +36,13 @@ fn asset_id_processor(target: syn::Type) -> structs::FieldProcessor {
             definition
         }
         None => structs::FieldProcessor::new(
-            quote! { ::sns_asset_manager::prelude::AssetRef },
-            quote! { ::sns_asset_manager::prelude::AssetRef },
+            quote! { ::sns_asset_manager::prelude::AssetId },
+            quote! { ::sns_asset_manager::prelude::AssetId },
             Some(target),
             |target, value, field| {
                 let target = target.expect("Asset reference processor requires a target type");
                 quote! {
-                    registry.resolve_asset_ref::<#target>(&#value, symbols, #field)
+                    registry.resolve_asset_id::<#target>(&#value, symbols, #field)
                 }
             },
             |value| quote! { (*#value).clone() },
@@ -72,7 +72,7 @@ fn asset_container_definition(rust_type: &str) -> Option<structs::FieldProcessor
             |target, value, field| {
                 let target = target.expect("tag reference processor requires a target type");
                 quote! {
-                    registry.resolve_asset_ref::<#target>(&#value.0, symbols, #field)
+                    registry.resolve_asset_id::<#target>(&#value.0, symbols, #field)
                 }
             },
             |_value| {
