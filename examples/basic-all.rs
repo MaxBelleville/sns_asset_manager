@@ -38,13 +38,12 @@ pub fn main() {
         .script_engine()
         .register_fn("double", |value: i64| value * 2);
 
-    let script_result = registry
-        .call_rhai_fn(
-            &AssetId::from("core:script".to_string()),
-            "callback",
-            vec![Dynamic::from(21_i64)],
-        )
+    let rhai_callback = registry
+        .get_rhai_fn(&AssetId::from("core:script".to_string()), "callback")
         .unwrap();
+    let script_result = rhai_callback.call(vec![Dynamic::from(21_i64)]).unwrap();
+    let second_result = rhai_callback.call(vec![Dynamic::from(42_i64)]).unwrap();
 
     println!("Script callback: {}", script_result);
+    println!("Script callback again: {}", second_result);
 }

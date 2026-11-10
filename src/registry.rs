@@ -3,7 +3,7 @@ use rhai::{Dynamic, Engine};
 use super::SymbolMap;
 use super::asset_header::AssetHeader;
 use super::asset_shared::{AssetGroup, AssetId, AssetRef, AssetVal};
-use super::scripts::{RhaiScript, ScriptRuntime};
+use super::scripts::{RhaiFunction, RhaiScript, ScriptRuntime};
 use std::fmt::Display;
 use std::{
     any::{Any, TypeId},
@@ -93,6 +93,14 @@ impl RegistryResource {
         args: Vec<Dynamic>,
     ) -> Result<rhai::Dynamic, String> {
         self.registry.call_rhai_fn(script, function, args)
+    }
+
+    pub fn get_rhai_fn(
+        &self,
+        script: &AssetId,
+        function: &str,
+    ) -> Result<RhaiFunction<'_>, String> {
+        self.registry.get_rhai_fn(script, function)
     }
 }
 
@@ -297,6 +305,18 @@ impl Registry {
             .ok_or_else(|| format!("Script asset not found {}", script.to_string()))?;
         let dynamic = self.script_run.call(item, function, args)?;
         Ok(dynamic)
+    }
+
+    /// Get a reusable handle for a function in a loaded Rhai script.
+    pub fn get_rhai_fn(
+        &self,
+        script: &AssetId,
+        function: &str,
+    ) -> Result<RhaiFunction<'_>, String> {
+        let item = self
+            .lookup_item::<RhaiScript>(script)
+            .ok_or_else(|| format!("Script asset not found {}", script))?;
+        self.script_run.get_fn(item, function)
     }
 
     pub fn script_engine(&mut self) -> &mut Engine {

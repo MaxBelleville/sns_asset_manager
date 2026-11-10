@@ -50,7 +50,7 @@ pub mod prelude {
     pub use crate::registry::initialize_registry;
     pub use crate::registry::{GlossaryItem, Registry};
     pub use crate::rhai::Dynamic;
-    pub use crate::scripts::{RhaiScript, ScriptRuntime};
+    pub use crate::scripts::{RhaiFunction, RhaiScript, ScriptRuntime};
     pub use macros::MakeAsset;
 }
 

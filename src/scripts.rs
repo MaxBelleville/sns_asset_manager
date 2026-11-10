@@ -14,6 +14,38 @@ pub struct RhaiScript {
     asset_id: AssetId,
 }
 
+/// A reusable handle to a function in a loaded Rhai script.
+///
+/// The handle borrows the runtime's engine and compiled script, so it cannot
+/// outlive the runtime or be used while the registry is mutably borrowed.
+pub struct RhaiFunction<'a> {
+    engine: &'a Engine,
+    ast: &'a AST,
+    script_id: AssetId,
+    function: String,
+}
+
+impl RhaiFunction<'_> {
+    /// Call the script function with Rhai dynamic arguments.
+    pub fn call(&self, args: Vec<Dynamic>) -> Result<Dynamic, String> {
+        let mut scope = Scope::new();
+        self.engine
+            .call_fn_with_options::<Dynamic>(
+                rhai::CallFnOptions::new(),
+                &mut scope,
+                self.ast,
+                &self.function,
+                args,
+            )
+            .map_err(|error| {
+                format!(
+                    "Failed to call '{}' in script {}: {error}",
+                    self.function, self.script_id
+                )
+            })
+    }
+}
+
 impl RhaiScript {
     pub fn asset_id(&self) -> &AssetId {
         &self.asset_id
@@ -235,27 +267,27 @@ impl ScriptRuntime {
         function: &str,
         args: Vec<Dynamic>,
     ) -> Result<Dynamic, String> {
+        self.get_fn(script_item, function)?.call(args)
+    }
+
+    /// Create a reusable handle for a named function in a loaded script.
+    pub(crate) fn get_fn<'a>(
+        &'a self,
+        script_item: &GlossaryItem<RhaiScript>,
+        function: &str,
+    ) -> Result<RhaiFunction<'a>, String> {
         let ast = self.programs.get(&script_item.get_val()).ok_or_else(|| {
             format!(
                 "Compiled program for script {} is not available",
                 script_item.get_id()
             )
         })?;
-        let mut scope = Scope::new();
-        self.engine
-            .call_fn_with_options::<Dynamic>(
-                rhai::CallFnOptions::new(),
-                &mut scope,
-                ast,
-                function,
-                args,
-            )
-            .map_err(|error| {
-                format!(
-                    "Failed to call '{function}' in script {}: {error}",
-                    script_item.get_id()
-                )
-            })
+        Ok(RhaiFunction {
+            engine: &self.engine,
+            ast,
+            script_id: script_item.get_id().clone(),
+            function: function.to_owned(),
+        })
     }
 }
 

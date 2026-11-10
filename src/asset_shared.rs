@@ -78,6 +78,18 @@ impl<T> PartialEq for AssetVal<T> {
     }
 }
 
+impl<T> Ord for AssetVal<T> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.val.cmp(&other.val)
+    }
+}
+
+impl<T> PartialOrd for AssetVal<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        self.val.partial_cmp(&other.val)
+    }
+}
+
 impl<T> Eq for AssetVal<T> {}
 
 impl<T> Copy for AssetVal<T> {}
