@@ -59,11 +59,27 @@ pub trait AssetGroup: Sized + Send + Sync + 'static {
     }
 }
 
-#[derive(Debug, Default, Hash, PartialEq, Eq)]
+#[derive(Debug, Default)]
 pub struct AssetVal<T> {
     val: u32,
     _marker: std::marker::PhantomData<T>,
 }
+impl<T> Hash for AssetVal<T> {
+    fn hash<H>(&self, state: &mut H)
+    where
+        H: std::hash::Hasher,
+    {
+        self.val.hash(state);
+    }
+}
+impl<T> PartialEq for AssetVal<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.val == other.val
+    }
+}
+
+impl<T> Eq for AssetVal<T> {}
+
 impl<T> Copy for AssetVal<T> {}
 
 impl<T> Clone for AssetVal<T> {
