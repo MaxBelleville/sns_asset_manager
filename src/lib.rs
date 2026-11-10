@@ -8,7 +8,8 @@ use ron::extensions::Extensions;
 use ron::options::Options;
 mod asset_header;
 mod asset_shared;
-mod declares;
+mod declare_enum;
+mod declare_tag;
 mod registry;
 mod scripts;
 
@@ -24,11 +25,13 @@ pub use serde;
 use asset_header::{
     AssetBundle, AssetBundleNode, AssetHeader, AssetType, ProcessedAssets, RawAssetSource,
 };
+use declare_tag::expand_tag_selectors;
 
 #[doc(hidden)]
 pub mod __macros {
     pub use crate::asset_shared::AssetGroup;
-    pub use crate::declares::{EnumSelectionRaw, TagSelectionRaw};
+    pub use crate::declare_enum::EnumSelectionRaw;
+    pub use crate::declare_tag::TagSelectionRaw;
     pub use crate::inventory;
     pub use crate::registry::AssetRegistration;
     pub use crate::rhai;
@@ -37,8 +40,8 @@ pub mod __macros {
 
 pub mod prelude {
     pub use crate::asset_shared::{AssetId, AssetRef, AssetVal, CollectionId};
-    pub use crate::declares::{DeclareEnum, DeclareEnumView, EnumFlags, EnumSelectionView};
-    pub use crate::declares::{DeclareTag, DeclareTagView};
+    pub use crate::declare_enum::{DeclareEnum, DeclareEnumView, EnumFlags, EnumSelectionView};
+    pub use crate::declare_tag::{DeclareTag, DeclareTagView};
     #[cfg(not(feature = "bevy"))]
     pub use crate::process_assets;
     #[cfg(feature = "bevy")]
@@ -85,7 +88,7 @@ pub fn process_assets(
                 .data
                 .take()
                 .ok_or_else(|| format!("Missing data for Declare(Tag) {}", tag_id))?;
-            header.data = Some(declares::expand_tag_selectors(data, tag_id, &catalog)?);
+            header.data = Some(expand_tag_selectors(data, tag_id, &catalog)?);
         }
     }
 

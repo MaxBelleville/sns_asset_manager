@@ -3,6 +3,6 @@
     asset_type: Declare(Tag),
     data: (items: {
         "BasicEnum": ["core:asset"],
-        "DeclareEnum": ["core:flags"],
+        "DeclareEnum": ["#flags"],
     }),
 )
