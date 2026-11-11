@@ -51,6 +51,10 @@ pub struct RhaiFnRefRaw {
     pub function: String,
 }
 
+/* TODO: Potentially use in the future arc or something
+ * so we don't need a lifetime meaning we can theoretically
+ * call rhai functions without needing register.
+ * */
 /// A reusable handle to a function in a loaded Rhai script.
 ///
 /// The handle borrows the runtime's engine and compiled script, so it cannot

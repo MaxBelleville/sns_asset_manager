@@ -70,7 +70,11 @@ impl RegistryResource {
         self.registry.lookup_asset::<A>(asset_id)
     }
 
-    pub fn registry(&self) -> &Registry {
+    pub fn inner_mut(&mut self) -> &mut Registry {
+        &mut self.registry
+    }
+
+    pub fn inner(&self) -> &Registry {
         &self.registry
     }
 
