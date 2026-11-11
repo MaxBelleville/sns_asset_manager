@@ -3,7 +3,7 @@ use super::asset_header::AssetHeader;
 use super::SymbolMap;
 use rhai::{CustomType, Dynamic, Map, TypeBuilder};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use super::asset_shared::{AssetGroup, AssetId, AssetVal, CollectionId};
 use super::registry::{AssetRegistration, GlossaryItem, Registry};
@@ -44,7 +44,7 @@ impl DeclareTag {
     pub fn map<A: AssetGroup + Clone>(
         &self,
         registry: &Registry,
-    ) -> Result<HashMap<AssetVal<A>, A>, String> {
+    ) -> Result<BTreeMap<AssetVal<A>, A>, String> {
         self.items::<A>(registry).map(|items| {
             items
                 .into_iter()
@@ -365,7 +365,7 @@ impl AssetVal<DeclareTag> {
     pub fn map<A: AssetGroup + Clone>(
         &self,
         registry: &Registry,
-    ) -> Result<HashMap<AssetVal<A>, A>, String> {
+    ) -> Result<BTreeMap<AssetVal<A>, A>, String> {
         let tag = registry
             .get_item::<DeclareTag>(self.get() as usize)
             .ok_or_else(|| format!("Declare(Tag) ID {} is not loaded", self.get()))?;
