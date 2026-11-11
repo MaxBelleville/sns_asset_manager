@@ -21,8 +21,36 @@ pub struct DeclareTag {
 }
 
 impl DeclareTag {
-    pub fn items(&self) -> &HashMap<String, Vec<AssetId>> {
-        &self.items
+    pub fn items<'a, A: AssetGroup>(
+        &self,
+        registry: &'a Registry,
+    ) -> Result<Vec<&'a GlossaryItem<A>>, String> {
+        let vec = self
+            .items_for_type(A::STRUCT_NAME)
+            .iter()
+            .map(|asset_id| {
+                registry.lookup_item::<A>(asset_id).ok_or_else(|| {
+                    format!(
+                        "Tag member {} is not loaded as type '{}'",
+                        asset_id,
+                        A::STRUCT_NAME
+                    )
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(vec)
+    }
+
+    pub fn map<A: AssetGroup + Clone>(
+        &self,
+        registry: &Registry,
+    ) -> Result<HashMap<AssetVal<A>, A>, String> {
+        self.items::<A>(registry).map(|items| {
+            items
+                .into_iter()
+                .map(|item| (AssetVal::<A>::from(item.get_val()), item.get().clone()))
+                .collect()
+        })
     }
 
     pub fn contains(&self, asset_id: &AssetId) -> bool {
@@ -255,9 +283,7 @@ impl DeclareTagView {
             .map(|(asset_type, asset_ids)| {
                 let assets = asset_ids
                     .iter()
-                    .map(|asset_id| {
-                        (asset_id.to_string().into(), self.view_lookup.get(asset_id))
-                    })
+                    .map(|asset_id| (asset_id.to_string().into(), self.view_lookup.get(asset_id)))
                     .collect::<Map>();
                 (asset_type.clone().into(), Dynamic::from(assets))
             })
@@ -330,19 +356,7 @@ impl AssetVal<DeclareTag> {
             .get_item::<DeclareTag>(self.get() as usize)
             .ok_or_else(|| format!("Declare(Tag) ID {} is not loaded", self.get()))?;
 
-        tag.get()
-            .items_for_type(A::STRUCT_NAME)
-            .iter()
-            .map(|asset_id| {
-                registry.lookup_item::<A>(asset_id).ok_or_else(|| {
-                    format!(
-                        "Tag member {} is not loaded as type '{}'",
-                        asset_id,
-                        A::STRUCT_NAME
-                    )
-                })
-            })
-            .collect()
+        tag.get().items::<A>(registry)
     }
 
     /// Clones this tag's members into a map keyed by their typed asset values.
@@ -352,12 +366,11 @@ impl AssetVal<DeclareTag> {
         &self,
         registry: &Registry,
     ) -> Result<HashMap<AssetVal<A>, A>, String> {
-        self.items::<A>(registry).map(|items| {
-            items
-                .into_iter()
-                .map(|item| (AssetVal::<A>::from(item.get_val()), item.get().clone()))
-                .collect()
-        })
+        let tag = registry
+            .get_item::<DeclareTag>(self.get() as usize)
+            .ok_or_else(|| format!("Declare(Tag) ID {} is not loaded", self.get()))?;
+
+        tag.get().map::<A>(registry)
     }
 }
 inventory::submit! {
