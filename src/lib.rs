@@ -22,9 +22,9 @@ pub use ron;
 #[doc(hidden)]
 pub use serde;
 
-use asset_header::{
-    AssetBundle, AssetBundleNode, AssetHeader, AssetType, ProcessedAssets, RawAssetSource,
-};
+pub use asset_header::{AssetBundle, AssetBundleNode};
+
+use asset_header::{AssetHeader, AssetType, ProcessedAssets, RawAssetSource};
 use declare_tag::expand_tag_selectors;
 
 #[doc(hidden)]
@@ -40,7 +40,6 @@ pub mod __macros {
 }
 
 pub mod prelude {
-    pub use crate::asset_header::{AssetBundle, AssetBundleNode};
     pub use crate::asset_shared::{AssetId, AssetRef, AssetVal, CollectionId};
     pub use crate::declare_enum::{DeclareEnum, DeclareEnumView, EnumFlags, EnumSelectionView};
     pub use crate::declare_tag::{DeclareTag, DeclareTagView};
@@ -53,6 +52,7 @@ pub mod prelude {
     pub use crate::registry::{GlossaryItem, Registry};
     pub use crate::rhai::Dynamic;
     pub use crate::scripts::{RhaiFnRef, RhaiFunction, RhaiScript, ScriptRuntime};
+    pub use crate::{AssetBundle, AssetBundleNode};
     pub use macros::MakeAsset;
 }
 
