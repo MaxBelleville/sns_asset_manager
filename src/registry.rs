@@ -506,8 +506,8 @@ impl<A: AssetGroup> GlossaryItem<A> {
         &self.asset
     }
 
-    pub fn get_val(&self) -> u32 {
-        self.val.get()
+    pub fn get_val(&self) -> AssetVal<A> {
+        self.val
     }
 
     pub fn get_ref(&self) -> &AssetRef {

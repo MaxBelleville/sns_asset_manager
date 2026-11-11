@@ -341,12 +341,15 @@ impl ScriptRuntime {
         script_item: &GlossaryItem<RhaiScript>,
         function: &str,
     ) -> Result<RhaiFunction<'a>, String> {
-        let ast = self.programs.get(&script_item.get_val()).ok_or_else(|| {
-            format!(
-                "Compiled program for script {} is not available",
-                script_item.get_id()
-            )
-        })?;
+        let ast = self
+            .programs
+            .get(&script_item.get_val().get())
+            .ok_or_else(|| {
+                format!(
+                    "Compiled program for script {} is not available",
+                    script_item.get_id()
+                )
+            })?;
         if !ast
             .iter_functions()
             .any(|metadata| metadata.name == function && metadata.access.is_public())

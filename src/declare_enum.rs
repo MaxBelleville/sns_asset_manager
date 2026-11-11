@@ -123,7 +123,7 @@ impl EnumFlags {
         let item = registry
             .lookup_item::<DeclareEnum>(&reference)
             .ok_or_else(|| format!("Missing Declare(Enum) asset {}", reference))?;
-        let declaration = AssetVal::<DeclareEnum>::from(item.get_val());
+        let declaration = item.get_val();
         let definition = item.get();
 
         let mut bits = 0u32;

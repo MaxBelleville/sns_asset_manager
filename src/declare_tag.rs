@@ -48,7 +48,7 @@ impl DeclareTag {
         self.items::<A>(registry).map(|items| {
             items
                 .into_iter()
-                .map(|item| (AssetVal::<A>::from(item.get_val()), item.get().clone()))
+                .map(|item| (item.get_val(), item.get().clone()))
                 .collect()
         })
     }
