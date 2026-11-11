@@ -32,14 +32,15 @@ pub mod __macros {
     pub use crate::asset_shared::AssetGroup;
     pub use crate::declare_enum::EnumSelectionRaw;
     pub use crate::declare_tag::TagSelectionRaw;
-    pub use crate::scripts::RhaiFnRefRaw;
     pub use crate::inventory;
     pub use crate::registry::AssetRegistration;
     pub use crate::rhai;
+    pub use crate::scripts::RhaiFnRefRaw;
     pub use crate::serde;
 }
 
 pub mod prelude {
+    pub use crate::asset_header::AssetBundleNode;
     pub use crate::asset_shared::{AssetId, AssetRef, AssetVal, CollectionId};
     pub use crate::declare_enum::{DeclareEnum, DeclareEnumView, EnumFlags, EnumSelectionView};
     pub use crate::declare_tag::{DeclareTag, DeclareTagView};
