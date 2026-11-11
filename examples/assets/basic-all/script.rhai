@@ -4,9 +4,12 @@ fn callback(value) {
     let asset = lookup_asset(AssetId::from("core:asset"));
     let flags = asset.flags;
     let basic_flag = lookup_asset(AssetId::from("core:asset2"));
-    let tag_members = basic_flag.tag.items["BasicEnum"];
+    let tag_members = basic_flag.tag.items.BasicEnum;
+    let tagged_asset = basic_flag.tag.views.BasicEnum["core:asset"];
 
-    if flags.reference == AssetId::from("core:flags") && tag_members[0] == AssetId::from("core:asset") {
+    if flags.reference == AssetId::from("core:flags")
+        && tag_members[0] == AssetId::from("core:asset")
+        && tagged_asset.is_loaded {
         helper::run(value)
     } else {
         0

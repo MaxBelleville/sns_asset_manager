@@ -1,12 +1,13 @@
 use super::asset_header::AssetHeader;
 
 use super::SymbolMap;
-use rhai::{CustomType, Dynamic, Map};
+use rhai::{CustomType, Dynamic, Map, TypeBuilder};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
 use super::asset_shared::{AssetGroup, AssetId, AssetVal, CollectionId};
 use super::registry::{AssetRegistration, GlossaryItem, Registry};
+use super::scripts::ViewLookup;
 
 /// Raw form of `Tag("namespace:name")` in a static asset field.
 #[doc(hidden)]
@@ -221,16 +222,16 @@ fn namespace_matches(namespace: &str, filter: &str) -> bool {
     }
 }
 
-#[derive(Debug, Clone, CustomType)]
-#[rhai_type(name = "DeclareTag")]
+#[derive(Clone)]
 pub struct DeclareTagView {
-    #[rhai_type(readonly)]
     pub items: Map,
+    item_ids: HashMap<String, Vec<AssetId>>,
+    view_lookup: ViewLookup,
 }
 
 impl DeclareTagView {
-    fn from_items(items: &HashMap<String, Vec<AssetId>>) -> Self {
-        let items = items
+    fn from_items(member_ids: &HashMap<String, Vec<AssetId>>, registry: &Registry) -> Self {
+        let items = member_ids
             .iter()
             .map(|(asset_type, refs)| {
                 let refs = refs
@@ -241,7 +242,26 @@ impl DeclareTagView {
                 (asset_type.clone().into(), Dynamic::from(refs))
             })
             .collect();
-        Self { items }
+        Self {
+            items,
+            item_ids: member_ids.clone(),
+            view_lookup: registry.script_view_lookup(),
+        }
+    }
+
+    fn views(&self) -> Map {
+        self.item_ids
+            .iter()
+            .map(|(asset_type, asset_ids)| {
+                let assets = asset_ids
+                    .iter()
+                    .map(|asset_id| {
+                        (asset_id.to_string().into(), self.view_lookup.get(asset_id))
+                    })
+                    .collect::<Map>();
+                (asset_type.clone().into(), Dynamic::from(assets))
+            })
+            .collect()
     }
 
     #[doc(hidden)]
@@ -249,7 +269,24 @@ impl DeclareTagView {
         let item = registry
             .lookup_item::<DeclareTag>(&raw.0)
             .ok_or_else(|| format!("Missing Declare(Tag) asset {}", raw.0))?;
-        Ok(Self::from_items(&item.get().items))
+        Ok(Self::from_items(&item.get().items, registry))
+    }
+}
+
+impl std::fmt::Debug for DeclareTagView {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DeclareTagView")
+            .field("items", &self.items)
+            .finish_non_exhaustive()
+    }
+}
+
+impl CustomType for DeclareTagView {
+    fn build(mut builder: TypeBuilder<Self>) {
+        builder
+            .with_name("DeclareTag")
+            .with_get("items", |view: &mut Self| view.items.clone())
+            .with_get("views", |view: &mut Self| view.views());
     }
 }
 
@@ -258,8 +295,10 @@ impl AssetGroup for DeclareTag {
     type Raw = DeclareTagRaw;
     type View = DeclareTagView;
 
-    fn view_from_raw(raw: &Self::Raw, _registry: &Registry) -> Result<Option<Dynamic>, String> {
-        Ok(Some(Dynamic::from(DeclareTagView::from_items(&raw.items))))
+    fn view_from_raw(raw: &Self::Raw, registry: &Registry) -> Result<Option<Dynamic>, String> {
+        Ok(Some(Dynamic::from(DeclareTagView::from_items(
+            &raw.items, registry,
+        ))))
     }
 
     fn from_raw(
@@ -304,6 +343,21 @@ impl AssetVal<DeclareTag> {
                 })
             })
             .collect()
+    }
+
+    /// Clones this tag's members into a map keyed by their typed asset values.
+    ///
+    /// The returned map is an owned snapshot and does not borrow from the registry.
+    pub fn map<A: AssetGroup + Clone>(
+        &self,
+        registry: &Registry,
+    ) -> Result<HashMap<AssetVal<A>, A>, String> {
+        self.items::<A>(registry).map(|items| {
+            items
+                .into_iter()
+                .map(|item| (AssetVal::<A>::from(item.get_val()), item.get().clone()))
+                .collect()
+        })
     }
 }
 inventory::submit! {

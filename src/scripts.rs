@@ -6,7 +6,7 @@ use rhai::{AST, Dynamic, Engine, EvalAltResult, Module, ModuleResolver, Position
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::io::Read;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, Weak};
 
 /// A script entry stored in the registry. Its typed ID addresses compiled code in `ScriptRuntime`.
 #[derive(Debug, Clone)]
@@ -114,6 +114,25 @@ impl AssetGroup for RhaiScript {
 
 type ViewStore = Arc<RwLock<HashMap<AssetId, StoredView>>>;
 type ProgramStore = Arc<RwLock<HashMap<AssetId, AST>>>;
+
+#[derive(Clone)]
+pub(crate) struct ViewLookup(Weak<RwLock<HashMap<AssetId, StoredView>>>);
+
+impl ViewLookup {
+    pub(crate) fn get(&self, asset_id: &AssetId) -> Dynamic {
+        let Some(views) = self.0.upgrade() else {
+            return Dynamic::UNIT;
+        };
+
+        match views.read() {
+            Ok(views) => views
+                .get(asset_id)
+                .map(|view| view.value.clone())
+                .unwrap_or(Dynamic::UNIT),
+            Err(_) => Dynamic::UNIT,
+        }
+    }
+}
 
 #[derive(Clone)]
 struct StoredView {
@@ -238,6 +257,10 @@ impl ScriptRuntime {
             program_refs,
             views,
         }
+    }
+
+    pub(crate) fn view_lookup(&self) -> ViewLookup {
+        ViewLookup(Arc::downgrade(&self.views))
     }
 
     /// Access the engine to register host functions and configure Rhai before loading assets.

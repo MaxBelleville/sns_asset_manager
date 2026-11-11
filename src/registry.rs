@@ -3,7 +3,9 @@ use rhai::{Dynamic, Engine};
 use super::SymbolMap;
 use super::asset_header::AssetHeader;
 use super::asset_shared::{AssetGroup, AssetId, AssetRef, AssetVal};
-use super::scripts::{RhaiFnRef, RhaiFnRefRaw, RhaiFunction, RhaiScript, ScriptRuntime};
+use super::scripts::{
+    RhaiFnRef, RhaiFnRefRaw, RhaiFunction, RhaiScript, ScriptRuntime, ViewLookup,
+};
 use std::fmt::Display;
 use std::{
     any::{Any, TypeId},
@@ -354,6 +356,11 @@ impl Registry {
     pub fn script(&mut self) -> &mut ScriptRuntime {
         &mut self.script_run
     }
+
+    pub(crate) fn script_view_lookup(&self) -> ViewLookup {
+        self.script_run.view_lookup()
+    }
+
     pub fn glossary_items_str<'a, A: AssetGroup>(&self, items: Vec<&GlossaryItem<A>>) -> String {
         let mut full_str = "".to_string();
         for item in items {
