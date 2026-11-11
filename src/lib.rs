@@ -40,7 +40,7 @@ pub mod __macros {
 }
 
 pub mod prelude {
-    pub use crate::asset_header::AssetBundleNode;
+    pub use crate::asset_header::{AssetBundle, AssetBundleNode};
     pub use crate::asset_shared::{AssetId, AssetRef, AssetVal, CollectionId};
     pub use crate::declare_enum::{DeclareEnum, DeclareEnumView, EnumFlags, EnumSelectionView};
     pub use crate::declare_tag::{DeclareTag, DeclareTagView};
