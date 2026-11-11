@@ -67,7 +67,8 @@ fn make(
           pub fn try_from_raw(
                 raw: #raw_name,
                 registry: &mut ::sns_asset_manager::prelude::Registry,
-                symbols: &std::collections::HashMap<String,u32>
+                symbols: &std::collections::HashMap<String,u32>,
+                asset_id_string: String,
             ) -> Result<Self, String> {
               #( #convert_fields )*
               Ok(Self {
@@ -77,9 +78,10 @@ fn make(
               pub fn from_raw(
                 raw: #raw_name,
                 registry: &mut ::sns_asset_manager::prelude::Registry,
-                symbols: &std::collections::HashMap<String,u32>
+                symbols: &std::collections::HashMap<String,u32>,
+                asset_id_string: String,
               ) -> Self {
-                Self::try_from_raw(raw, registry, symbols).expect("Failed to convert raw asset")
+                Self::try_from_raw(raw, registry, symbols, asset_id_string).expect("Failed to convert raw asset")
               }
               #( #getters )*
 
@@ -94,8 +96,9 @@ fn make(
                   raw: Self::Raw,
                   registry: &mut ::sns_asset_manager::prelude::Registry,
                   symbols: &std::collections::HashMap<String,u32>,
+                  asset_id_string: String,
               ) -> Result<Self, String> {
-                  Self::try_from_raw(raw, registry, symbols)
+                  Self::try_from_raw(raw, registry, symbols, asset_id_string)
               }
           }
           ::sns_asset_manager::__macros::inventory::submit! {

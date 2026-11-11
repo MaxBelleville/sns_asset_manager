@@ -3,7 +3,7 @@ use rhai::{Dynamic, Engine};
 use super::SymbolMap;
 use super::asset_header::AssetHeader;
 use super::asset_shared::{AssetGroup, AssetId, AssetRef, AssetVal};
-use super::scripts::{RhaiFunction, RhaiScript, ScriptRuntime};
+use super::scripts::{RhaiFnRef, RhaiFnRefRaw, RhaiFunction, RhaiScript, ScriptRuntime};
 use std::fmt::Display;
 use std::{
     any::{Any, TypeId},
@@ -87,12 +87,16 @@ impl RegistryResource {
     }
 
     pub fn call_rhai_fn(
-        &mut self,
+        &self,
         script: &AssetId,
         function: &str,
         args: Vec<Dynamic>,
     ) -> Result<rhai::Dynamic, String> {
         self.registry.call_rhai_fn(script, function, args)
+    }
+
+    pub fn call_fn_ref(&self, function: &RhaiFnRef, args: Vec<Dynamic>) -> Result<Dynamic, String> {
+        self.registry.call_fn_ref(function, args)
     }
 
     pub fn get_rhai_fn(
@@ -295,7 +299,7 @@ impl Registry {
     }
 
     pub fn call_rhai_fn(
-        &mut self,
+        &self,
         script: &AssetId,
         function: &str,
         args: Vec<Dynamic>,
@@ -305,6 +309,26 @@ impl Registry {
             .ok_or_else(|| format!("Script asset not found {}", script.to_string()))?;
         let dynamic = self.script_run.call(item, function, args)?;
         Ok(dynamic)
+    }
+
+    /// Resolve and validate a function reference while converting a static asset.
+    pub fn resolve_rhai_fn_ref(
+        &self,
+        raw: RhaiFnRefRaw,
+        owner_str: String,
+    ) -> Result<RhaiFnRef, String> {
+        self.get_rhai_fn(&raw.asset_ref, &raw.function)?;
+        let owner = AssetId::from(owner_str);
+        let rhai_ref = RhaiFnRef::new(owner, raw.asset_ref, raw.function);
+        Ok(rhai_ref)
+    }
+
+    /// Call a function reference stored in a static asset, prepending its owner ID.
+    pub fn call_fn_ref(&self, function: &RhaiFnRef, args: Vec<Dynamic>) -> Result<Dynamic, String> {
+        let mut all_args = Vec::with_capacity(args.len() + 1);
+        all_args.push(Dynamic::from(function.owner().clone()));
+        all_args.extend(args);
+        self.call_rhai_fn(&function.script(), &function.function(), all_args)
     }
 
     /// Get a reusable handle for a function in a loaded Rhai script.

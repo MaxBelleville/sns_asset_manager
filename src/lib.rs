@@ -32,6 +32,7 @@ pub mod __macros {
     pub use crate::asset_shared::AssetGroup;
     pub use crate::declare_enum::EnumSelectionRaw;
     pub use crate::declare_tag::TagSelectionRaw;
+    pub use crate::scripts::RhaiFnRefRaw;
     pub use crate::inventory;
     pub use crate::registry::AssetRegistration;
     pub use crate::rhai;
@@ -50,7 +51,7 @@ pub mod prelude {
     pub use crate::registry::initialize_registry;
     pub use crate::registry::{GlossaryItem, Registry};
     pub use crate::rhai::Dynamic;
-    pub use crate::scripts::{RhaiFunction, RhaiScript, ScriptRuntime};
+    pub use crate::scripts::{RhaiFnRef, RhaiFunction, RhaiScript, ScriptRuntime};
     pub use macros::MakeAsset;
 }
 
@@ -105,6 +106,11 @@ pub fn process_assets(
         }
     }
 
+    // Script references in static fields are resolved during field conversion.
+    for header in processed.scripts {
+        registry.__load_script(header, &symbols)?;
+    }
+
     for (struct_name, headers) in processed.statics {
         let loader = *registry.get_loader(&struct_name).ok_or_else(|| {
             format!(
@@ -115,10 +121,6 @@ pub fn process_assets(
         for header in headers {
             loader(registry, header.asset_ref, &symbols, header.data.unwrap())?;
         }
-    }
-
-    for header in processed.scripts {
-        registry.__load_script(header, &symbols)?;
     }
 
     Ok(asset_bundles)

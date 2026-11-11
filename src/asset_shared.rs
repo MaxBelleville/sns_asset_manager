@@ -18,6 +18,7 @@ pub trait AssetGroup: Sized + Send + Sync + 'static {
         raw: Self::Raw,
         registry: &mut Registry,
         symbols: &SymbolMap,
+        asset_id_string: String,
     ) -> Result<Self, String>;
 
     fn load_ron_asset(
@@ -44,7 +45,8 @@ pub trait AssetGroup: Sized + Send + Sync + 'static {
 
         let view = Self::view_from_raw(&raw, registry)?;
 
-        let asset = Self::from_raw(raw, registry, symbols)?;
+        let asset = Self::from_raw(raw, registry, symbols, asset_id_string)?;
+
         let view_ref = asset_ref.clone();
 
         let glossary = registry

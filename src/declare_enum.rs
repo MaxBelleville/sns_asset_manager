@@ -89,6 +89,7 @@ impl AssetGroup for DeclareEnum {
         raw: Self::Raw,
         _registry: &mut Registry,
         _symbols: &SymbolMap,
+        _asset_id_string: String,
     ) -> Result<Self, String> {
         if raw.items.len() > 32 {
             return Err(format!(

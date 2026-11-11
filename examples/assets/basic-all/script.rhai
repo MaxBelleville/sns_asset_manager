@@ -12,3 +12,11 @@ fn callback(value) {
         0
     }
 }
+
+fn asset_callback(owner, value) {
+    if is_unit(lookup_asset(owner)) {
+        0
+    } else {
+        helper::run(value)
+    }
+}

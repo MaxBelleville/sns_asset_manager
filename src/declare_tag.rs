@@ -266,6 +266,7 @@ impl AssetGroup for DeclareTag {
         raw: Self::Raw,
         _registry: &mut Registry,
         symbols: &SymbolMap,
+        _asset_id_string: String,
     ) -> Result<Self, String> {
         let mut members = HashSet::new();
         for item in raw.items.values().flatten() {

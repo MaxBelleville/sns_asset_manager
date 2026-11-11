@@ -13,6 +13,8 @@ pub(crate) fn asset_fields(fields: Vec<&syn::Field>) -> Vec<structs::FieldInfo> 
         let processor = utils::asset_val_target(&inner_ty)
             .map(|target| asset_val_processor(target))
             .or_else(|| declared_field_processor(&inner_ty));
+        let exclude_rhai = utils::field_as_attr(field, "exclude_from_rhai")
+            || utils::last_type_name(&inner_ty).as_deref() == Some("RhaiFnRef");
 
         result.push(structs::FieldInfo::new(
             name,
@@ -20,7 +22,7 @@ pub(crate) fn asset_fields(fields: Vec<&syn::Field>) -> Vec<structs::FieldInfo> 
             processor,
             container,
             utils::field_as_attr(field, "copy_getter"),
-            utils::field_as_attr(field, "exclude_from_rhai"),
+            exclude_rhai,
         ));
     }
 
@@ -64,7 +66,7 @@ fn declared_field_processor(ty: &syn::Type) -> Option<structs::FieldProcessor> {
 fn asset_container_definition(rust_type: &str) -> Option<structs::FieldProcessor> {
     // Add declared/raw field forms here; the shared FieldInfo path handles their
     // Single, Option, and Vec containers and applies the selected converter.
-    let definitions = [
+    let definitions: [structs::FieldProcessor; 3] = [
         structs::FieldProcessor::new(
             quote! {::sns_asset_manager::__macros::TagSelectionRaw},
             quote! { ::sns_asset_manager::prelude::DeclareTagView },
@@ -101,6 +103,18 @@ fn asset_container_definition(rust_type: &str) -> Option<structs::FieldProcessor
             true,
             false,
             stringify!(EnumFlags),
+        ),
+        structs::FieldProcessor::new(
+            quote! {::sns_asset_manager::__macros::RhaiFnRefRaw},
+            quote! { ::sns_asset_manager::prelude::AssetId },
+            None,
+            |_target, value, _field| {
+                quote! { registry.resolve_rhai_fn_ref(#value, asset_id_string) }
+            },
+            |value| quote! { (#value).script().clone() },
+            true,
+            false,
+            stringify!(RhaiFnRef),
         ),
     ];
     definitions

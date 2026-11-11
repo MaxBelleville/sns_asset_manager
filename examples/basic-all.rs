@@ -12,6 +12,7 @@ pub struct BasicEnum {
 pub struct BasicFlag {
     is_loaded: bool,
     tag: AssetVal<DeclareTag>,
+    on_spawn: RhaiFnRef,
 }
 
 pub fn main() {
@@ -34,6 +35,8 @@ pub fn main() {
         registry.glossary_items_str(tagged_declarations),
     );
 
+    let asset_callback_ref = basic_tag.on_spawn.clone();
+
     registry
         .script_engine()
         .register_fn("double", |value: i64| value * 2);
@@ -46,4 +49,10 @@ pub fn main() {
 
     println!("Script callback: {}", script_result);
     println!("Script callback again: {}", second_result);
+
+    let asset_callback = registry
+        .call_fn_ref(&asset_callback_ref, vec![Dynamic::from(21_i64)])
+        .unwrap();
+
+    println!("Asset callback: {}", asset_callback);
 }

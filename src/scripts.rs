@@ -14,6 +14,43 @@ pub struct RhaiScript {
     asset_id: AssetId,
 }
 
+/// An owned reference to a function in a loaded Rhai script.
+#[derive(Debug, Clone)]
+pub struct RhaiFnRef {
+    owner: AssetId,
+    script: AssetId,
+    function: String,
+}
+
+impl RhaiFnRef {
+    pub fn script(&self) -> &AssetId {
+        &self.script
+    }
+
+    pub fn function(&self) -> &str {
+        &self.function
+    }
+    pub fn owner(&self) -> &AssetId {
+        &self.owner
+    }
+    pub(crate) fn new(owner: AssetId, script: AssetId, function: String) -> Self {
+        Self {
+            script,
+            function,
+            owner,
+        }
+    }
+}
+
+/// Raw RON representation used for a `RhaiFnRef` static asset field.
+#[doc(hidden)]
+#[derive(Debug, Deserialize, Clone)]
+pub struct RhaiFnRefRaw {
+    pub asset_ref: AssetId,
+    #[serde(rename = "fn")]
+    pub function: String,
+}
+
 /// A reusable handle to a function in a loaded Rhai script.
 ///
 /// The handle borrows the runtime's engine and compiled script, so it cannot
@@ -65,6 +102,7 @@ impl AssetGroup for RhaiScript {
         _raw: Self::Raw,
         _registry: &mut Registry,
         _symbols: &SymbolMap,
+        _asset_id_string: String,
     ) -> Result<Self, String> {
         Err("Scripts are compiled and loaded by ScriptRuntime".to_owned())
     }
@@ -282,6 +320,16 @@ impl ScriptRuntime {
                 script_item.get_id()
             )
         })?;
+        if !ast
+            .iter_functions()
+            .any(|metadata| metadata.name == function && metadata.access.is_public())
+        {
+            return Err(format!(
+                "Public function '{}' was not found in script {}",
+                function,
+                script_item.get_id()
+            ));
+        }
         Ok(RhaiFunction {
             engine: &self.engine,
             ast,

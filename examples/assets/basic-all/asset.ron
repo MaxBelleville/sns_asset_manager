@@ -6,6 +6,6 @@ data: (is_loaded:true, flags:Enum(ref:"core:flags",values:["enable_b"])) //flags
 (
 asset_type:Static,
 struct_name:"BasicFlag",
-data: (is_loaded:true,tag:Tag("core:basic-all-tag"))
+data: (is_loaded:true,tag:Tag("core:basic-all-tag"),on_spawn:(asset_ref:"core:script",fn:"asset_callback"))
 )
 ]
