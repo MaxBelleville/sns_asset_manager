@@ -3,7 +3,7 @@ use super::asset_header::AssetHeader;
 use super::asset_shared::{AssetGroup, AssetId, AssetRef};
 use super::registry::{AssetRegistration, GlossaryItem, Registry};
 use rhai::{AST, Dynamic, Engine, EvalAltResult, Module, ModuleResolver, Position, Scope};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::Read;
 use std::sync::{Arc, RwLock, Weak};
@@ -44,7 +44,7 @@ impl RhaiFnRef {
 
 /// Raw RON representation used for a `RhaiFnRef` static asset field.
 #[doc(hidden)]
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct RhaiFnRefRaw {
     pub asset_ref: AssetId,
     #[serde(rename = "fn")]
@@ -94,7 +94,7 @@ impl RhaiScript {
 }
 
 #[doc(hidden)]
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct RhaiScriptRaw;
 
 impl AssetGroup for RhaiScript {
@@ -103,7 +103,7 @@ impl AssetGroup for RhaiScript {
     type View = ();
 
     fn from_raw(
-        _raw: Self::Raw,
+        _raw: &Self::Raw,
         _registry: &mut Registry,
         _symbols: &SymbolMap,
         _asset_id_string: String,

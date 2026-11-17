@@ -25,6 +25,7 @@ pub use serde;
 use asset_header::{
     AssetBundle, AssetBundleNode, AssetHeader, AssetType, ProcessedAssets, RawAssetSource,
 };
+
 use declare_tag::expand_tag_selectors;
 
 #[doc(hidden)]
@@ -35,13 +36,14 @@ pub mod __macros {
     pub use crate::inventory;
     pub use crate::registry::AssetRegistration;
     pub use crate::rhai;
+    pub use crate::ron;
     pub use crate::scripts::RhaiFnRefRaw;
     pub use crate::serde;
 }
 
 pub mod prelude {
     pub use crate::asset_header::{AssetBundle, AssetBundleNode};
-    pub use crate::asset_shared::{AssetId, AssetRef, AssetVal, CollectionId};
+    pub use crate::asset_shared::{AssetFieldVal, AssetId, AssetIdVal, AssetRef, CollectionId};
     pub use crate::declare_enum::{DeclareEnum, DeclareEnumView, EnumFlags, EnumSelectionView};
     pub use crate::declare_tag::{DeclareTag, DeclareTagView};
     #[cfg(not(feature = "bevy"))]
@@ -93,17 +95,42 @@ pub fn process_assets(
             header.data = Some(expand_tag_selectors(data, tag_id, &catalog)?);
         }
     }
-
-    // Declarations are loaded first because static fields may depend on them.
-    for (struct_name, headers) in processed.declares {
-        let loader = *registry.get_loader(&struct_name).ok_or_else(|| {
+    let mut static_asset_strs = HashMap::new();
+    for (struct_name, headers) in processed.statics {
+        let raw_loader = *registry.get_raw_loader(&struct_name).ok_or_else(|| {
             format!(
                 "No registered asset loader found for declaration type: '{}'",
                 struct_name,
             )
         })?;
+        let mut asset_refs = Vec::new();
         for header in headers {
-            loader(registry, header.asset_ref, &symbols, header.data.unwrap())?;
+            let asset_id = header.asset_ref.get_id_str();
+            raw_loader(registry, &header.asset_ref, header.data.unwrap())?;
+            registry.__mark_static_raw(asset_id);
+            asset_refs.push(header.asset_ref)
+        }
+        static_asset_strs.insert(struct_name, asset_refs);
+    }
+
+    // Declarations are loaded first because static fields may depend on them.
+    for (struct_name, headers) in processed.declares {
+        let raw_loader = *registry.get_raw_loader(&struct_name).ok_or_else(|| {
+            format!(
+                "No registered asset loader found for declaration type: '{}'",
+                struct_name,
+            )
+        })?;
+
+        let loader = *registry.get_loader(&struct_name).unwrap();
+        for header in headers {
+            raw_loader(registry, &header.asset_ref, header.data.unwrap())?;
+            let asset_id = header.asset_ref.get_id_str();
+            let raw = registry
+                .get_erased_raw(&asset_id)
+                .cloned()
+                .ok_or_else(|| format!("Missing staged raw asset '{}'", asset_id))?;
+            loader(registry, header.asset_ref, &symbols, &raw)?;
         }
     }
 
@@ -112,15 +139,15 @@ pub fn process_assets(
         registry.__load_script(header, &symbols)?;
     }
 
-    for (struct_name, headers) in processed.statics {
-        let loader = *registry.get_loader(&struct_name).ok_or_else(|| {
-            format!(
-                "No registered asset loader found for struct type: '{}'",
-                struct_name
-            )
-        })?;
-        for header in headers {
-            loader(registry, header.asset_ref, &symbols, header.data.unwrap())?;
+    for (struct_name, asset_refs) in static_asset_strs {
+        let loader = *registry.get_loader(&struct_name).unwrap();
+        for asset_ref in asset_refs {
+            let asset_id = asset_ref.get_id_str();
+            let raw = registry
+                .get_erased_raw(&asset_id)
+                .cloned()
+                .ok_or_else(|| format!("Missing staged raw asset '{}'", asset_id))?;
+            loader(registry, asset_ref, &symbols, &raw)?;
         }
     }
 

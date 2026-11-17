@@ -9,8 +9,7 @@ pub struct BasicA {
 
 #[derive(Debug, MakeAsset)]
 pub struct BasicB {
-    #[exclude_from_rhai]
-    parent: Vec<AssetVal<BasicA>>,
+    parent_is_loaded: Vec<AssetFieldVal<BasicA, bool>>,
     is_loaded: bool,
 }
 
@@ -22,8 +21,14 @@ pub fn main() {
     let basic = registry.lookup_asset_by_id::<BasicB>(0).unwrap();
 
     println!(
-        "is_loaded {} parent {}",
+        "is_loaded {} parent_is_loaded {}",
         basic.is_loaded,
-        basic.parent.get(0).unwrap()
-    )
+        basic.parent_is_loaded[0].get()
+    );
+
+    let projected_value = registry
+        .script_engine()
+        .eval::<bool>(r#"lookup_asset(AssetId::from("core:asset")).parent_is_loaded[0]"#)
+        .unwrap();
+    println!("Rhai projected value {}", projected_value);
 }

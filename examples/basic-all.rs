@@ -11,7 +11,7 @@ pub struct BasicEnum {
 #[derive(Debug, MakeAsset)]
 pub struct BasicFlag {
     is_loaded: bool,
-    tag: AssetVal<DeclareTag>,
+    tag: AssetIdVal<DeclareTag>,
     on_spawn: RhaiFnRef,
 }
 

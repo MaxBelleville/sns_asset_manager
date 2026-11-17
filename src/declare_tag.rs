@@ -5,13 +5,13 @@ use rhai::{CustomType, Dynamic, Map, TypeBuilder};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use super::asset_shared::{AssetGroup, AssetId, AssetVal, CollectionId};
+use super::asset_shared::{AssetGroup, AssetId, AssetIdVal, CollectionId};
 use super::registry::{AssetRegistration, GlossaryItem, Registry};
 use super::scripts::ViewLookup;
 
 /// Raw form of `Tag("namespace:name")` in a static asset field.
 #[doc(hidden)]
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct TagSelectionRaw(pub AssetId);
 
 /// A tag declaration groups asset references for consumers to query.
@@ -44,7 +44,7 @@ impl DeclareTag {
     pub fn map<A: AssetGroup + Clone>(
         &self,
         registry: &Registry,
-    ) -> Result<BTreeMap<AssetVal<A>, A>, String> {
+    ) -> Result<BTreeMap<AssetIdVal<A>, A>, String> {
         self.items::<A>(registry).map(|items| {
             items
                 .into_iter()
@@ -66,7 +66,7 @@ impl DeclareTag {
 }
 
 #[doc(hidden)]
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct DeclareTagRaw {
     items: HashMap<String, Vec<AssetId>>,
 }
@@ -321,14 +321,18 @@ impl AssetGroup for DeclareTag {
     type Raw = DeclareTagRaw;
     type View = DeclareTagView;
 
-    fn view_from_raw(raw: &Self::Raw, registry: &Registry) -> Result<Option<Dynamic>, String> {
+    fn view_from_raw(
+        raw: &Self::Raw,
+        registry: &Registry,
+        _symbols: &SymbolMap,
+    ) -> Result<Option<Dynamic>, String> {
         Ok(Some(Dynamic::from(DeclareTagView::from_items(
             &raw.items, registry,
         ))))
     }
 
     fn from_raw(
-        raw: Self::Raw,
+        raw: &Self::Raw,
         _registry: &mut Registry,
         symbols: &SymbolMap,
         _asset_id_string: String,
@@ -342,11 +346,13 @@ impl AssetGroup for DeclareTag {
                 return Err(format!("Declare(Tag) contains duplicate asset {}", item));
             }
         }
-        Ok(Self { items: raw.items })
+        Ok(Self {
+            items: raw.items.clone(),
+        })
     }
 }
 
-impl AssetVal<DeclareTag> {
+impl AssetIdVal<DeclareTag> {
     /// Resolves the members of this tag as typed glossary items.
     pub fn items<'a, A: AssetGroup>(
         &self,
@@ -365,7 +371,7 @@ impl AssetVal<DeclareTag> {
     pub fn map<A: AssetGroup + Clone>(
         &self,
         registry: &Registry,
-    ) -> Result<BTreeMap<AssetVal<A>, A>, String> {
+    ) -> Result<BTreeMap<AssetIdVal<A>, A>, String> {
         let tag = registry
             .get_item::<DeclareTag>(self.get() as usize)
             .ok_or_else(|| format!("Declare(Tag) ID {} is not loaded", self.get()))?;

@@ -13,8 +13,9 @@ pub(crate) struct FieldProcessor {
     raw_type: TokenStream,
     view_type: TokenStream,
     target: Option<syn::Type>,
-    convert_one: fn(Option<&syn::Type>, TokenStream, &str) -> TokenStream,
-    view_convert: fn(TokenStream) -> TokenStream,
+    field_type: Option<syn::Type>,
+    convert_one: fn(Option<&syn::Type>, Option<&syn::Type>, TokenStream, &str) -> TokenStream,
+    view_convert: fn(Option<&syn::Type>, Option<&syn::Type>, TokenStream, &str) -> TokenStream,
     fallible: bool,
     view_fallible: bool,
     rust_type: &'static str,
@@ -25,8 +26,9 @@ impl FieldProcessor {
         raw_type: TokenStream,
         view_type: TokenStream,
         target: Option<syn::Type>,
-        convert_one: fn(Option<&syn::Type>, TokenStream, &str) -> TokenStream,
-        view_convert: fn(TokenStream) -> TokenStream,
+        field_type: Option<syn::Type>,
+        convert_one: fn(Option<&syn::Type>, Option<&syn::Type>, TokenStream, &str) -> TokenStream,
+        view_convert: fn(Option<&syn::Type>, Option<&syn::Type>, TokenStream, &str) -> TokenStream,
         fallible: bool,
         view_fallible: bool,
         rust_type: &'static str,
@@ -35,6 +37,7 @@ impl FieldProcessor {
             raw_type,
             view_type,
             target,
+            field_type,
             convert_one,
             view_convert,
             fallible,
@@ -100,6 +103,23 @@ impl FieldInfo {
         quote! { pub #name: #ty }
     }
 
+    pub(crate) fn match_field(&self) -> TokenStream {
+        let name = &self.name;
+
+        let field_name = syn::LitStr::new(&name.to_string(), name.span());
+
+        quote! {
+        #field_name => {
+            let encoded = ::sns_asset_manager::__macros::ron::to_string(&raw.#name)
+                .map_err(|e| e.to_string())?;
+            ::sns_asset_manager::__macros::ron::from_str::<
+                ::sns_asset_manager::__macros::ron::Value
+            >(&encoded)
+            .map_err(|e| e.to_string())
+        }
+        }
+    }
+
     pub(crate) fn view_field(&self) -> TokenStream {
         let name = &self.name;
         let ty = &self.ty;
@@ -141,8 +161,15 @@ impl FieldInfo {
             };
         };
 
-        let convert = |value| (processor.view_convert)(value);
         let field_name = name.to_string();
+        let convert = |value| {
+            (processor.view_convert)(
+                processor.target.as_ref(),
+                processor.field_type.as_ref(),
+                value,
+                &field_name,
+            )
+        };
         match (self.container, processor.view_fallible) {
             (ContainerType::Single, false) => {
                 let value = convert(quote! { &raw.#name });
@@ -193,8 +220,14 @@ impl FieldInfo {
             return quote! {};
         };
 
-        let convert_one =
-            |value| (processor.convert_one)(processor.target.as_ref(), value, &field_name);
+        let convert_one = |value| {
+            (processor.convert_one)(
+                processor.target.as_ref(),
+                processor.field_type.as_ref(),
+                value,
+                &field_name,
+            )
+        };
 
         match (self.container, processor.fallible) {
             (ContainerType::Single, false) => {
@@ -210,25 +243,25 @@ impl FieldInfo {
             }
             (ContainerType::Option, false) => {
                 let expression = convert_one(quote! { value });
-                quote! { let #name = raw.#name.map(|value| #expression); }
+                quote! { let #name = raw.#name.as_ref().map(|value| #expression); }
             }
             (ContainerType::Option, true) => {
                 let expression = convert_one(quote! { value });
                 quote! {
-                    let #name = raw.#name.map(|value| #expression).transpose()
+                    let #name = raw.#name.as_ref().map(|value| #expression).transpose()
                         .map_err(|error| format!("Field '{}': {}", #field_name, error))?;
                 }
             }
             (ContainerType::Vec, false) => {
                 let expression = convert_one(quote! { value });
                 quote! {
-                    let #name = raw.#name.into_iter().map(|value| #expression).collect();
+                    let #name = raw.#name.iter().map(|value| #expression).collect();
                 }
             }
             (ContainerType::Vec, true) => {
                 let expression = convert_one(quote! { value });
                 quote! {
-                    let #name = raw.#name.into_iter().map(|value| #expression)
+                    let #name = raw.#name.iter().map(|value| #expression)
                         .collect::<Result<Vec<_>, _>>()
                         .map_err(|error| format!("Field '{}': {}", #field_name, error))?;
                 }
@@ -242,7 +275,7 @@ impl FieldInfo {
         if self.processor.is_some() {
             return quote! { #name };
         }
-        quote! { #name: raw.#name }
+        quote! { #name: raw.#name.clone() }
     }
 
     pub(crate) fn getter(&self) -> TokenStream {

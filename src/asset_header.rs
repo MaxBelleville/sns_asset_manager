@@ -8,6 +8,7 @@ use serde::{
         value::{MapAccessDeserializer, SeqAccessDeserializer},
     },
 };
+
 use std::{
     collections::HashMap,
     fmt::{self},
@@ -163,6 +164,18 @@ impl AssetHeader {
         if name.contains('*') {
             return Err(format!(
                 "Asset names cannot contain '*': {}:{}",
+                namespace, name
+            ));
+        }
+        if name.contains('.') {
+            return Err(format!(
+                "Asset names cannot contain '.': {}:{}",
+                namespace, name
+            ));
+        }
+        if name.contains(':') || namespace.contains(':') {
+            return Err(format!(
+                "Asset IDs cannot contain an extra ':': {}:{}",
                 namespace, name
             ));
         }

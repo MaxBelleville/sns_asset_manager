@@ -10,7 +10,7 @@ pub struct BasicA {
 #[derive(Debug, MakeAsset)]
 pub struct BasicB {
     #[exclude_from_rhai]
-    parent: Vec<AssetVal<BasicA>>,
+    parent: Vec<AssetIdVal<BasicA>>,
     is_loaded: bool,
 }
 

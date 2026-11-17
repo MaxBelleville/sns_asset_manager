@@ -26,7 +26,10 @@ pub fn derive_make_asset(input: TokenStream) -> TokenStream {
 
     let (type_ref, fields) = (type_ref_result.unwrap(), fields_result.unwrap());
 
-    let fields_info = analysis::asset_fields(fields);
+    let fields_info = match analysis::asset_fields(fields) {
+        Ok(f) => f,
+        Err(error) => return error.to_compile_error().into(),
+    };
 
     let name = &input.ident;
 
@@ -43,6 +46,7 @@ fn make(
     let view_name = quote::format_ident!("SNS{}View", name);
 
     let raw_fields = fields_info.iter().map(|f| f.raw_field());
+    let match_fields = fields_info.iter().map(|f| f.match_field());
 
     let view_fields = utils::iter_included(fields_info).map(|f| f.view_field());
     let view_values = utils::iter_included(fields_info).map(|f| f.view_value());
@@ -59,13 +63,16 @@ fn make(
     let view_impl = utils::validate_view_impl(view_name.clone(), view_values, exclude_struct);
     let register_view = utils::validate_reg_view(view_name, exclude_struct);
 
+    let raw_name_str = syn::LitStr::new(&raw_name.to_string(), raw_name.span());
+
     quote! {
         #raw_struct
         #view_struct
 
+
         impl #name {
           pub fn try_from_raw(
-                raw: #raw_name,
+                raw: &#raw_name,
                 registry: &mut ::sns_asset_manager::prelude::Registry,
                 symbols: &std::collections::HashMap<String,u32>,
                 asset_id_string: String,
@@ -74,18 +81,27 @@ fn make(
               Ok(Self {
                   #( #final_fields, )*
               })
-              }
-              pub fn from_raw(
-                raw: #raw_name,
-                registry: &mut ::sns_asset_manager::prelude::Registry,
-                symbols: &std::collections::HashMap<String,u32>,
-                asset_id_string: String,
-              ) -> Self {
-                Self::try_from_raw(raw, registry, symbols, asset_id_string).expect("Failed to convert raw asset")
-              }
-              #( #getters )*
-
           }
+
+          pub fn from_raw(
+            raw: &#raw_name,
+            registry: &mut ::sns_asset_manager::prelude::Registry,
+            symbols: &std::collections::HashMap<String,u32>,
+            asset_id_string: String,
+          ) -> Self {
+            	Self::try_from_raw(raw, registry, symbols, asset_id_string).expect("Failed to convert raw asset")
+          }
+
+          pub fn ron_from_field(raw: &#raw_name, field: &str) -> Result<::sns_asset_manager::__macros::ron::Value,String> {
+              match field {
+                    #( #match_fields, )*
+                    _ => Err(format!("{} has no raw field '{}'",#raw_name_str,field)),
+              }
+          }
+
+          #( #getters )*
+
+         	}
 
           impl ::sns_asset_manager::__macros::AssetGroup for #name {
               const STRUCT_NAME: &'static str = #struct_name;
@@ -93,12 +109,15 @@ fn make(
               type View = #view_type;
               #view_impl
               fn from_raw(
-                  raw: Self::Raw,
+                  raw: &Self::Raw,
                   registry: &mut ::sns_asset_manager::prelude::Registry,
                   symbols: &std::collections::HashMap<String,u32>,
                   asset_id_string: String,
               ) -> Result<Self, String> {
                   Self::try_from_raw(raw, registry, symbols, asset_id_string)
+              }
+              fn ron_from_field(raw: &#raw_name, field: &str) -> Result<::sns_asset_manager::__macros::ron::Value,String> {
+                  Self::ron_from_field(raw, field)
               }
           }
           ::sns_asset_manager::__macros::inventory::submit! {

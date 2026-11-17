@@ -88,21 +88,37 @@ pub(crate) fn parse_container_and_inner(ty: &syn::Type) -> (structs::ContainerTy
     (structs::ContainerType::Single, ty.clone())
 }
 
-pub(crate) fn asset_val_target(ty: &syn::Type) -> Option<syn::Type> {
+pub(crate) fn asset_val_types(ty: &syn::Type) -> Option<(syn::Type, Option<syn::Type>)> {
     let syn::Type::Path(type_path) = ty else {
         return None;
     };
     let segment = type_path.path.segments.last()?;
-    if segment.ident != "AssetVal" {
+    let has_field_type = segment.ident == "AssetFieldVal";
+    if !has_field_type && segment.ident != "AssetVal" && segment.ident != "AssetIdVal" {
         return None;
     }
     let syn::PathArguments::AngleBracketed(args) = &segment.arguments else {
         return None;
     };
-    match args.args.first()? {
-        syn::GenericArgument::Type(target) => Some(target.clone()),
-        _ => None,
+
+    let mut type_args = args.args.iter();
+    let target = match type_args.next()? {
+        syn::GenericArgument::Type(target) => target.clone(),
+        _ => return None,
+    };
+    let field_type = if has_field_type {
+        match type_args.next()? {
+            syn::GenericArgument::Type(field_type) => Some(field_type.clone()),
+            _ => return None,
+        }
+    } else {
+        None
+    };
+    if type_args.next().is_some() {
+        return None;
     }
+
+    Some((target, field_type))
 }
 
 pub(crate) fn generate_raw(
@@ -110,7 +126,10 @@ pub(crate) fn generate_raw(
     raw_fields: impl Iterator<Item = TokenStream>,
 ) -> TokenStream {
     quote! {
-        #[derive(::sns_asset_manager::__macros::serde::Deserialize)]
+        #[derive(
+            ::sns_asset_manager::__macros::serde::Deserialize,
+            ::sns_asset_manager::__macros::serde::Serialize
+        )]
         #[doc(hidden)]
         pub struct #raw_name {
             #( #raw_fields, )*
@@ -181,6 +200,7 @@ pub(crate) fn validate_view_impl(
                 fn view_from_raw(
                         _raw: &Self::Raw,
                         _registry: &::sns_asset_manager::prelude::Registry,
+                        _symbols: &std::collections::HashMap<String, u32>,
                 ) -> Result<Option<::sns_asset_manager::__macros::rhai::Dynamic>, String> {
                         Ok(None)
                 }
@@ -190,6 +210,7 @@ pub(crate) fn validate_view_impl(
                 fn view_from_raw(
                         raw: &Self::Raw,
                         registry: &::sns_asset_manager::prelude::Registry,
+                        symbols: &std::collections::HashMap<String, u32>,
                 ) -> Result<Option<::sns_asset_manager::__macros::rhai::Dynamic>, String> {
                         Ok(Some(::sns_asset_manager::__macros::rhai::Dynamic::from(
                                 #view_name { #( #view_values, )* }
@@ -204,5 +225,29 @@ pub(crate) fn validate_reg_view(view_name: syn::Ident, exclude_struct: bool) -> 
         quote! {}
     } else {
         quote! { registry.script_engine().build_type::<#view_name>(); }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::asset_val_types;
+    use quote::quote;
+
+    #[test]
+    fn asset_field_val_parses_source_and_field_types() {
+        let ty: syn::Type = syn::parse_quote!(AssetFieldVal<BasicA, Vec<bool>>);
+        let (source, field) = asset_val_types(&ty).unwrap();
+
+        assert_eq!(quote!(#source).to_string(), "BasicA");
+        assert_eq!(quote!(#field).to_string(), "Vec < bool >");
+    }
+
+    #[test]
+    fn asset_id_val_has_no_projected_field_type() {
+        let ty: syn::Type = syn::parse_quote!(AssetIdVal<BasicA>);
+        let (source, field) = asset_val_types(&ty).unwrap();
+
+        assert_eq!(quote!(#source).to_string(), "BasicA");
+        assert!(field.is_none());
     }
 }

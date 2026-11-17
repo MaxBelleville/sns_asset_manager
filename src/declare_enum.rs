@@ -1,9 +1,9 @@
 use super::SymbolMap;
 use rhai::{CustomType, Dynamic};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
-use super::asset_shared::{AssetGroup, AssetId, AssetVal};
+use super::asset_shared::{AssetGroup, AssetId, AssetIdVal};
 use super::registry::{AssetRegistration, Registry};
 
 /// Runtime definition for a declared set of enum values.
@@ -43,7 +43,7 @@ impl DeclareEnum {
 }
 
 #[doc(hidden)]
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct DeclareEnumRaw {
     items: Vec<String>,
 }
@@ -79,14 +79,18 @@ impl AssetGroup for DeclareEnum {
     type Raw = DeclareEnumRaw;
     type View = DeclareEnumView;
 
-    fn view_from_raw(raw: &Self::Raw, _registry: &Registry) -> Result<Option<Dynamic>, String> {
+    fn view_from_raw(
+        raw: &Self::Raw,
+        _registry: &Registry,
+        _symbols: &SymbolMap,
+    ) -> Result<Option<Dynamic>, String> {
         Ok(Some(Dynamic::from(DeclareEnumView {
             items: raw.items.iter().cloned().map(Dynamic::from).collect(),
         })))
     }
 
     fn from_raw(
-        raw: Self::Raw,
+        raw: &Self::Raw,
         _registry: &mut Registry,
         _symbols: &SymbolMap,
         _asset_id_string: String,
@@ -103,14 +107,16 @@ impl AssetGroup for DeclareEnum {
                 return Err(format!("Declare(Enum) contains duplicate item '{}'", item));
             }
         }
-        Ok(Self { items: raw.items })
+        Ok(Self {
+            items: raw.items.clone(),
+        })
     }
 }
 
 /// A selected subset of one registered enum declaration.
 #[derive(Debug, Clone, Copy)]
 pub struct EnumFlags {
-    declaration: AssetVal<DeclareEnum>,
+    declaration: AssetIdVal<DeclareEnum>,
     bits: u32,
 }
 
@@ -144,7 +150,7 @@ impl EnumFlags {
         Ok(Self { declaration, bits })
     }
 
-    pub fn declaration_id(&self) -> AssetVal<DeclareEnum> {
+    pub fn declaration_id(&self) -> AssetIdVal<DeclareEnum> {
         self.declaration
     }
 
@@ -168,7 +174,7 @@ impl EnumFlags {
 }
 
 #[doc(hidden)]
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct EnumSelectionRaw {
     #[serde(rename = "ref")]
     reference: AssetId,

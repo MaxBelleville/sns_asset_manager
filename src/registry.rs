@@ -1,24 +1,24 @@
 use rhai::{Dynamic, Engine};
 
+use crate::asset_shared::AssetFieldVal;
+
 use super::SymbolMap;
 use super::asset_header::AssetHeader;
-use super::asset_shared::{AssetGroup, AssetId, AssetRef, AssetVal};
+use super::asset_shared::{AssetGroup, AssetId, AssetIdVal, AssetRef};
 use super::scripts::{
     RhaiFnRef, RhaiFnRefRaw, RhaiFunction, RhaiScript, ScriptRuntime, ViewLookup,
 };
-use std::fmt::Display;
+
+use serde::de::DeserializeOwned;
+
+use std::fmt::{Debug, Display};
+
 use std::{
     any::{Any, TypeId},
-    collections::HashMap,
+    collections::{HashMap, HashSet},
+    sync::Arc,
 };
 
-pub type AssetLoaderFn = fn(&mut Registry, AssetRef, &SymbolMap, ron::Value) -> Result<(), String>;
-
-pub struct AssetRegistration {
-    pub register_fn: fn(&mut Registry),
-}
-
-inventory::collect!(AssetRegistration);
 #[cfg(feature = "bevy")]
 use super::{asset_header::AssetBundleNode, process_assets};
 #[cfg(feature = "bevy")]
@@ -113,6 +113,16 @@ impl RegistryResource {
         self.registry.get_rhai_fn(script, function)
     }
 }
+pub type ErasedRaw = Arc<dyn Any>;
+pub type RawLoaderFn = fn(&mut Registry, &AssetRef, ron::Value) -> Result<(), String>;
+
+pub type AssetLoaderFn = fn(&mut Registry, AssetRef, &SymbolMap, &ErasedRaw) -> Result<(), String>;
+
+pub struct AssetRegistration {
+    pub register_fn: fn(&mut Registry),
+}
+
+inventory::collect!(AssetRegistration);
 
 /// Called at engine startup to populate the Registry with all derived asset types
 pub fn initialize_registry() -> Registry {
@@ -127,6 +137,9 @@ pub fn initialize_registry() -> Registry {
 pub struct Registry {
     struct_map: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
     name_map: HashMap<String, TypeId>,
+    raw_loaders: HashMap<String, RawLoaderFn>,
+    erased_raws: HashMap<String, ErasedRaw>,
+    static_raw_ids: HashSet<String>,
     loaders: HashMap<String, AssetLoaderFn>,
     script_run: ScriptRuntime,
 }
@@ -137,18 +150,70 @@ impl Registry {
         asset_id: &AssetId,
         symbols: &SymbolMap,
         field_name: &str,
-    ) -> AssetVal<A> {
-        let asset_id_str: String = asset_id.to_string();
-        let raw_id = symbols
-            .get(&asset_id_str)
-            .expect(&format!(
+    ) -> Result<AssetIdVal<A>, String> {
+        if asset_id.field().is_some() {
+            return Err(format!(
+                "Asset reference '{}' selects a field; Requires AssetFieldVal<Asset,Type>",
+                asset_id
+            ));
+        }
+        let asset_id_str = asset_id.get();
+
+        let Some(raw_id) = symbols.get(&asset_id_str) else {
+            return Err(format!(
                 "Failed to resolve asset reference '{}' for field '{}'",
                 asset_id, field_name
-            ))
-            .clone();
+            ));
+        };
 
-        AssetVal::<A>::from(raw_id)
+        Ok(AssetIdVal::<A>::from(raw_id.clone()))
     }
+
+    pub fn resolve_asset_field<A: AssetGroup, T: Debug + Copy + DeserializeOwned>(
+        &self,
+        asset_id: &AssetId,
+        symbols: &SymbolMap,
+        field_name: &str,
+    ) -> Result<AssetFieldVal<A, T>, String> {
+        let source_field = asset_id.field().ok_or_else(|| {
+            format!(
+                "Asset reference '{}' does not select a field for destination field '{}'",
+                asset_id, field_name
+            )
+        })?;
+        let asset_id_str = asset_id.get();
+
+        let Some(raw_id) = symbols.get(&asset_id_str) else {
+            return Err(format!(
+                "Failed to resolve asset reference '{}' for field '{}'",
+                asset_id, field_name
+            ));
+        };
+
+        if !self.static_raw_ids.contains(&asset_id_str) {
+            return Err(format!(
+                "Projected field reference '{}' for destination field '{}' must target a static asset",
+                asset_id, field_name
+            ));
+        }
+
+        let Some(erased_raw) = self.erased_raws.get(&asset_id_str) else {
+            return Err(format!(
+                "Failed to resolve asset reference '{}' for field '{}'",
+                asset_id, field_name
+            ));
+        };
+
+        let value = A::get_field::<T>(source_field, erased_raw).map_err(|error| {
+            format!(
+                "Failed to resolve projected field '{}' for destination field '{}': {}",
+                asset_id, field_name, error
+            )
+        })?;
+
+        Ok(AssetFieldVal::<A, T>::from((raw_id.clone(), value)))
+    }
+
     #[doc(hidden)]
     pub fn __register<A: AssetGroup>(&mut self) {
         let type_id = TypeId::of::<A>();
@@ -157,11 +222,27 @@ impl Registry {
             eprintln!("Duplicate struct_name skipping {}", A::STRUCT_NAME);
             return;
         }
+        let raw_loader = A::load_raw;
         let loader = A::load_ron_asset;
+
         self.struct_map
             .insert(type_id, Box::new(RegistryGlossary::<A>::default()));
         self.name_map.insert(A::STRUCT_NAME.to_string(), type_id);
+        self.raw_loaders
+            .insert(A::STRUCT_NAME.to_string(), raw_loader);
         self.loaders.insert(A::STRUCT_NAME.to_string(), loader);
+    }
+    #[doc(hidden)]
+    pub(crate) fn __add_raw(&mut self, asset_val_string: String, raw: ErasedRaw) {
+        self.erased_raws.insert(asset_val_string, raw);
+    }
+
+    pub(crate) fn __mark_static_raw(&mut self, asset_id: String) {
+        self.static_raw_ids.insert(asset_id);
+    }
+
+    pub(crate) fn get_erased_raw(&self, asset_val_string: &String) -> Option<&ErasedRaw> {
+        self.erased_raws.get(asset_val_string)
     }
 
     pub fn get<A: AssetGroup>(&self) -> Option<&RegistryGlossary<A>> {
@@ -228,9 +309,9 @@ impl Registry {
         let Some(glossary) = self.get() else {
             return None;
         };
-        glossary.lookup_asset_by_id(AssetVal::<A>::from(id))
+        glossary.lookup_asset_by_id(AssetIdVal::<A>::from(id))
     }
-    pub fn lookup_id<A: AssetGroup>(&self, asset_id: AssetId) -> Option<AssetVal<A>> {
+    pub fn lookup_id<A: AssetGroup>(&self, asset_id: AssetId) -> Option<AssetIdVal<A>> {
         let Some(glossary) = self.get() else {
             return None;
         };
@@ -252,6 +333,10 @@ impl Registry {
 
     pub fn get_loader(&self, struct_name: &str) -> Option<&AssetLoaderFn> {
         self.loaders.get(struct_name)
+    }
+
+    pub fn get_raw_loader(&self, struct_name: &str) -> Option<&RawLoaderFn> {
+        self.raw_loaders.get(struct_name)
     }
     #[doc(hidden)]
     pub fn __get_mut<A: AssetGroup>(&mut self) -> Option<&mut RegistryGlossary<A>> {
@@ -376,7 +461,7 @@ impl Registry {
 #[derive(Debug)]
 pub struct RegistryGlossary<A: AssetGroup> {
     items: Vec<Option<GlossaryItem<A>>>,
-    id_map: HashMap<AssetId, AssetVal<A>>,
+    id_map: HashMap<AssetId, AssetIdVal<A>>,
     _marker: std::marker::PhantomData<A>,
 }
 
@@ -400,10 +485,11 @@ impl<A: AssetGroup> RegistryGlossary<A> {
     ) -> Result<(), String> {
         let idx = val as usize;
 
-        let asset_val = AssetVal::<A>::from(val);
+        let asset_val = AssetIdVal::<A>::from(val);
         let asset_id = asset_ref
             .get_id()
             .ok_or_else(|| "Cannot insert an asset without an AssetId".to_owned())?;
+
         if self.items.len() <= idx {
             self.items.resize_with(idx + 1, || None);
         }
@@ -437,13 +523,13 @@ impl<A: AssetGroup> RegistryGlossary<A> {
     }
 
     #[doc(hidden)]
-    pub fn __get_mut(&mut self, asset_val: AssetVal<A>) -> Option<&mut A> {
+    pub fn __get_mut(&mut self, asset_val: AssetIdVal<A>) -> Option<&mut A> {
         let idx = asset_val.get() as usize;
         let item = self.items[idx].as_mut()?;
         Some(item.__get_mut())
     }
 
-    pub fn lookup_asset_by_id(&self, asset_val: AssetVal<A>) -> Option<&A> {
+    pub fn lookup_asset_by_id(&self, asset_val: AssetIdVal<A>) -> Option<&A> {
         let idx = asset_val.get() as usize;
         let item: &GlossaryItem<A> = self.items[idx].as_ref()?;
         Some(item.get())
@@ -455,8 +541,8 @@ impl<A: AssetGroup> RegistryGlossary<A> {
         self.get_item(idx)
     }
 
-    pub fn lookup_id(&self, asset_id: &AssetId) -> Option<AssetVal<A>> {
-        self.id_map.get(asset_id).copied()
+    pub fn lookup_id(&self, asset_id: &AssetId) -> Option<AssetIdVal<A>> {
+        self.id_map.get(&asset_id).copied()
     }
 
     pub fn lookup_string(&self, asset_id_str: String) -> Option<&A> {
@@ -483,13 +569,13 @@ impl<A: AssetGroup> RegistryGlossary<A> {
 #[derive(Debug)]
 pub struct GlossaryItem<A: AssetGroup> {
     asset: A,
-    val: AssetVal<A>,
+    val: AssetIdVal<A>,
     asset_ref: AssetRef,
     _marker: std::marker::PhantomData<A>,
 }
 impl<A: AssetGroup> GlossaryItem<A> {
     #[doc(hidden)]
-    fn __new(asset: A, asset_ref: AssetRef, val: AssetVal<A>) -> Self {
+    fn __new(asset: A, asset_ref: AssetRef, val: AssetIdVal<A>) -> Self {
         Self {
             asset,
             val,
@@ -506,7 +592,7 @@ impl<A: AssetGroup> GlossaryItem<A> {
         &self.asset
     }
 
-    pub fn get_val(&self) -> AssetVal<A> {
+    pub fn get_val(&self) -> AssetIdVal<A> {
         self.val
     }
 
