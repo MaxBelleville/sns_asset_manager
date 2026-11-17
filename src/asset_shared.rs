@@ -11,6 +11,13 @@ pub trait AssetGroup: Sized + Send + Sync + 'static {
     type Raw: DeserializeOwned + Serialize;
     type View: Clone + Send + Sync;
 
+    fn raw_field_value(raw: &ErasedRaw, field: &str) -> Result<ron::Value, String> {
+        let raw = raw
+            .downcast_ref::<Self::Raw>()
+            .ok_or_else(|| format!("Raw asset type mismatch for {}", Self::STRUCT_NAME))?;
+        Self::ron_from_field(raw, field)
+    }
+
     fn view_from_raw(
         _raw: &Self::Raw,
         _registry: &Registry,

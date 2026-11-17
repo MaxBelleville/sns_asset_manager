@@ -19,6 +19,7 @@ use vfs::VfsPath;
 pub enum DeclareType {
     Tag,
     Enum,
+    Conditional,
     //Add more types as needed
 }
 
@@ -35,6 +36,7 @@ impl DeclareType {
         match self {
             DeclareType::Tag => "Tag".to_string(),
             DeclareType::Enum => "Enum".to_string(),
+            DeclareType::Conditional => "Conditional".to_string(),
         }
     }
 }

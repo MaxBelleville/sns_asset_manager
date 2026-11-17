@@ -115,6 +115,7 @@ impl RegistryResource {
 }
 pub type ErasedRaw = Arc<dyn Any>;
 pub type RawLoaderFn = fn(&mut Registry, &AssetRef, ron::Value) -> Result<(), String>;
+pub(crate) type RawFieldFn = fn(&ErasedRaw, &str) -> Result<ron::Value, String>;
 
 pub type AssetLoaderFn = fn(&mut Registry, AssetRef, &SymbolMap, &ErasedRaw) -> Result<(), String>;
 
@@ -140,6 +141,7 @@ pub struct Registry {
     raw_loaders: HashMap<String, RawLoaderFn>,
     erased_raws: HashMap<String, ErasedRaw>,
     static_raw_ids: HashSet<String>,
+    raw_field_getters: HashMap<TypeId, RawFieldFn>,
     loaders: HashMap<String, AssetLoaderFn>,
     script_run: ScriptRuntime,
 }
@@ -224,6 +226,7 @@ impl Registry {
         }
         let raw_loader = A::load_raw;
         let loader = A::load_ron_asset;
+        let raw_field_getter = A::raw_field_value;
 
         self.struct_map
             .insert(type_id, Box::new(RegistryGlossary::<A>::default()));
@@ -231,6 +234,8 @@ impl Registry {
         self.raw_loaders
             .insert(A::STRUCT_NAME.to_string(), raw_loader);
         self.loaders.insert(A::STRUCT_NAME.to_string(), loader);
+        self.raw_field_getters
+            .insert(TypeId::of::<A::Raw>(), raw_field_getter);
     }
     #[doc(hidden)]
     pub(crate) fn __add_raw(&mut self, asset_val_string: String, raw: ErasedRaw) {
@@ -239,6 +244,14 @@ impl Registry {
 
     pub(crate) fn __mark_static_raw(&mut self, asset_id: String) {
         self.static_raw_ids.insert(asset_id);
+    }
+
+    pub(crate) fn is_static_raw(&self, asset_id: &str) -> bool {
+        self.static_raw_ids.contains(asset_id)
+    }
+
+    pub(crate) fn raw_field_getter(&self, type_id: TypeId) -> Option<RawFieldFn> {
+        self.raw_field_getters.get(&type_id).copied()
     }
 
     pub(crate) fn get_erased_raw(&self, asset_val_string: &String) -> Option<&ErasedRaw> {

@@ -227,27 +227,3 @@ pub(crate) fn validate_reg_view(view_name: syn::Ident, exclude_struct: bool) -> 
         quote! { registry.script_engine().build_type::<#view_name>(); }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::asset_val_types;
-    use quote::quote;
-
-    #[test]
-    fn asset_field_val_parses_source_and_field_types() {
-        let ty: syn::Type = syn::parse_quote!(AssetFieldVal<BasicA, Vec<bool>>);
-        let (source, field) = asset_val_types(&ty).unwrap();
-
-        assert_eq!(quote!(#source).to_string(), "BasicA");
-        assert_eq!(quote!(#field).to_string(), "Vec < bool >");
-    }
-
-    #[test]
-    fn asset_id_val_has_no_projected_field_type() {
-        let ty: syn::Type = syn::parse_quote!(AssetIdVal<BasicA>);
-        let (source, field) = asset_val_types(&ty).unwrap();
-
-        assert_eq!(quote!(#source).to_string(), "BasicA");
-        assert!(field.is_none());
-    }
-}

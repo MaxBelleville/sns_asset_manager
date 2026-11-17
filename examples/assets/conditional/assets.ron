@@ -1,0 +1,50 @@
+[
+    (
+        asset_name:"source",
+        asset_type:Static,
+        struct_name:"ConditionalSource",
+        data:(is_loaded:true, count:4),
+    ),
+    (
+        asset_name:"ready",
+        asset_type:Declare(Conditional),
+        data:(
+        //source.is_loaded == true && (source.count >= 3 || !(source.count < 3))
+        expr:(and:[
+            (cmp_left:(field:"core:source.is_loaded"),op:"eq",cmp_right:(value:true)),
+            (or:[
+                (cmp_left:(field:"core:source.count"),op:"ge",cmp_right:(value:3)),
+                (not:[(cmp_left:(field:"core:source.count"),op:"lt",cmp_right:(value:3))]),
+            ]),
+        ])),
+    ),
+    (
+        asset_name:"flags",
+        collection_name:"flags",
+        asset_type:Declare(Enum),
+        data:(items:["enable_a","enable_b","enable_c"]),
+    ),
+    (
+        asset_name:"enum_source",
+        asset_type:Static,
+        struct_name:"ConditionalEnumSource",
+        data:(flags:Enum(ref:"core:flags",values:["enable_b"])),
+    ),
+    (
+        asset_name:"enum_enabled",
+        asset_type:Declare(Conditional),
+        data:(expr:(cmp_left:(field:"core:enum_source.flags"),op:"eq",cmp_right:(value:"enable_b"))),
+    ),
+    (
+        asset_name:"enum_result",
+        asset_type:Static,
+        struct_name:"ConditionalEnumResult",
+        data:(enabled:Conditional("core:enum_enabled")),
+    ),
+    (
+        asset_name:"result",
+        asset_type:Static,
+        struct_name:"ConditionalResult",
+        data:(enabled:Conditional("core:ready")),
+    ),
+]

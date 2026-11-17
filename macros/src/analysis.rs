@@ -125,7 +125,7 @@ fn declared_field_processor(ty: &syn::Type) -> Option<structs::FieldProcessor> {
 fn asset_container_definition(rust_type: &str) -> Option<structs::FieldProcessor> {
     // Add declared/raw field forms here; the shared FieldInfo path handles their
     // Single, Option, and Vec containers and applies the selected converter.
-    let definitions: [structs::FieldProcessor; 3] = [
+    let definitions: [structs::FieldProcessor; 4] = [
         structs::FieldProcessor::new(
             quote! {::sns_asset_manager::__macros::TagSelectionRaw},
             quote! { ::sns_asset_manager::prelude::DeclareTagView },
@@ -177,6 +177,29 @@ fn asset_container_definition(rust_type: &str) -> Option<structs::FieldProcessor
             true,
             false,
             stringify!(RhaiFnRef),
+        ),
+        structs::FieldProcessor::new(
+            quote! {::sns_asset_manager::__macros::ConditionalRefRaw},
+            quote! { bool },
+            None,
+            None,
+            |_target, _field_type, value, field| {
+                quote! {
+                    registry.resolve_asset_id::<::sns_asset_manager::prelude::DeclareConditional>(
+                        &#value.0, symbols, #field
+                    ).and_then(|condition| condition.conditional_value(registry, symbols))
+                }
+            },
+            |_target, _field_type, value, field| {
+                quote! {
+                    registry.resolve_asset_id::<::sns_asset_manager::prelude::DeclareConditional>(
+                        &#value.0, symbols, #field
+                    ).and_then(|condition| condition.conditional_value(registry, symbols))
+                }
+            },
+            true,
+            true,
+            stringify!(Conditional),
         ),
     ];
     definitions

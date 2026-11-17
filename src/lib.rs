@@ -8,6 +8,7 @@ use ron::extensions::Extensions;
 use ron::options::Options;
 mod asset_header;
 mod asset_shared;
+mod declare_conditional;
 mod declare_enum;
 mod declare_tag;
 mod registry;
@@ -31,6 +32,7 @@ use declare_tag::expand_tag_selectors;
 #[doc(hidden)]
 pub mod __macros {
     pub use crate::asset_shared::AssetGroup;
+    pub use crate::declare_conditional::ConditionalRefRaw;
     pub use crate::declare_enum::EnumSelectionRaw;
     pub use crate::declare_tag::TagSelectionRaw;
     pub use crate::inventory;
@@ -44,6 +46,9 @@ pub mod __macros {
 pub mod prelude {
     pub use crate::asset_header::{AssetBundle, AssetBundleNode};
     pub use crate::asset_shared::{AssetFieldVal, AssetId, AssetIdVal, AssetRef, CollectionId};
+    pub use crate::declare_conditional::{
+        Conditional, ConditionalExpr, ConditionalOperand, DeclareConditional,
+    };
     pub use crate::declare_enum::{DeclareEnum, DeclareEnumView, EnumFlags, EnumSelectionView};
     pub use crate::declare_tag::{DeclareTag, DeclareTagView};
     #[cfg(not(feature = "bevy"))]
@@ -133,6 +138,8 @@ pub fn process_assets(
             loader(registry, header.asset_ref, &symbols, &raw)?;
         }
     }
+
+    declare_conditional::validate_loaded(registry, &symbols)?;
 
     // Script references in static fields are resolved during field conversion.
     for header in processed.scripts {

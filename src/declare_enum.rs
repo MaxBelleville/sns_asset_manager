@@ -181,6 +181,30 @@ pub struct EnumSelectionRaw {
     values: Vec<String>,
 }
 
+pub(crate) fn enum_flags_from_ron(
+    value: ron::Value,
+    registry: &Registry,
+) -> Result<(Vec<String>, Vec<String>), String> {
+    let selection: EnumSelectionRaw = value
+        .into_rust()
+        .map_err(|error| format!("Invalid EnumFlags field value: {error}"))?;
+
+    let declaration = registry
+        .lookup_item::<DeclareEnum>(&selection.reference)
+        .ok_or_else(|| format!("Missing Declare(Enum) asset {}", selection.reference))?;
+
+    let allowed = declaration.get().items();
+    for selected in &selection.values {
+        if !allowed.iter().any(|name| name == selected) {
+            return Err(format!(
+                "Unknown enum item '{}' in {}",
+                selected, selection.reference
+            ));
+        }
+    }
+    Ok((selection.values, allowed.to_vec()))
+}
+
 inventory::submit! {
     AssetRegistration {
         register_fn: |registry| {
