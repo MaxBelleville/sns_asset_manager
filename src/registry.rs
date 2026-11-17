@@ -113,7 +113,7 @@ impl RegistryResource {
         self.registry.get_rhai_fn(script, function)
     }
 }
-pub type ErasedRaw = Arc<dyn Any>;
+pub type ErasedRaw = Arc<dyn Any + Send + Sync>;
 pub type RawLoaderFn = fn(&mut Registry, &AssetRef, ron::Value) -> Result<(), String>;
 pub(crate) type RawFieldFn = fn(&ErasedRaw, &str) -> Result<ron::Value, String>;
 

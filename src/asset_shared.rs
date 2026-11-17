@@ -8,7 +8,7 @@ use std::{fmt::Debug, fmt::Display, marker::PhantomData, sync::Arc};
 
 pub trait AssetGroup: Sized + Send + Sync + 'static {
     const STRUCT_NAME: &'static str;
-    type Raw: DeserializeOwned + Serialize;
+    type Raw: DeserializeOwned + Serialize + Send + Sync;
     type View: Clone + Send + Sync;
 
     fn raw_field_value(raw: &ErasedRaw, field: &str) -> Result<ron::Value, String> {
