@@ -41,14 +41,14 @@ impl DeclareTag {
         Ok(vec)
     }
 
-    pub fn map<A: AssetGroup + Clone>(
+    pub fn map<'a, A: AssetGroup>(
         &self,
-        registry: &Registry,
-    ) -> Result<BTreeMap<AssetIdVal<A>, A>, String> {
+        registry: &'a Registry,
+    ) -> Result<BTreeMap<AssetIdVal<A>, &'a A>, String> {
         self.items::<A>(registry).map(|items| {
             items
                 .into_iter()
-                .map(|item| (item.get_val(), item.get().clone()))
+                .map(|item| (item.get_val(), item.get()))
                 .collect()
         })
     }
@@ -368,10 +368,10 @@ impl AssetIdVal<DeclareTag> {
     /// Clones this tag's members into a map keyed by their typed asset values.
     ///
     /// The returned map is an owned snapshot and does not borrow from the registry.
-    pub fn map<A: AssetGroup + Clone>(
+    pub fn map<'a, A: AssetGroup>(
         &self,
-        registry: &Registry,
-    ) -> Result<BTreeMap<AssetIdVal<A>, A>, String> {
+        registry: &'a Registry,
+    ) -> Result<BTreeMap<AssetIdVal<A>, &'a A>, String> {
         let tag = registry
             .get_item::<DeclareTag>(self.get() as usize)
             .ok_or_else(|| format!("Declare(Tag) ID {} is not loaded", self.get()))?;
